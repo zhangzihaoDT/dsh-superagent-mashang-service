@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "repository": "owner/business-repository",
+  "checkout": "/absolute/path/to/a/clean-checkout-of-the-repository",
+  "dataRoot": "/absolute/path/to/the/working-checkout-that-holds-the-data",
+  "baseRef": "main",
+  "branchPrefix": "agent/",
+  "fetch": false,
+  "clean": true,
+  "python": "python3",
+  "freshness": {
+    "maxAgeHours": 24
+  },
+  "declare": {
+    "command": [
+      "python3",
+      "-c",
+      "import json\nprint(json.dumps([{'path': 'dataset/order_data.parquet', 'required': True, 'cutoff': {'columns': ['lock_time']}}]))"
+    ],
+    "timeoutMs": 60000
+  },
+  "officialQueries": [
+    {
+      "id": "official-query",
+      "description": "Name the repository's existing official read-only query entry here.",
+      "command": ["python3", "path/to/official_query.py", "--format", "json"],
+      "notes": "Keep writes, updates and production sends out of the worktree."
+    }
+  ]
+}

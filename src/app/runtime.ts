@@ -98,7 +98,7 @@ export class Runtime extends Service implements SourceHost {
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
       const deployed = () => setup.configured()
-        ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
+        ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings(), stateDir: machine.stateDir }) : undefined
       const feishu = () => setup.configured() && !!setup.deployment.feishu
       const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
@@ -188,7 +188,7 @@ export class Runtime extends Service implements SourceHost {
   ticketEnvironment(ticket: Ticket): Variable[] {
     const trigger = sourceTrigger(this, ticket)
     const { setup: { deployment }, sources } = this
-    return ticketEnvironment({ deployment, sources, settings: this.store.settings(), ticket, ...trigger ? { trigger } : {} })
+    return ticketEnvironment({ deployment, sources, settings: this.store.settings(), stateDir: this.machine.stateDir, ticket, ...trigger ? { trigger } : {} })
   }
   checkSetup(): void { this.setup.check() }
   receive(trigger: Trigger): ReceiveResult { return this.passes.receive(trigger) }

@@ -18,6 +18,7 @@ import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
+import { ExecutionTimers } from './timing.ts'
 
 const now = (): string => new Date().toISOString()
 /** Returns the worker session ID (`worker-<ticketId>`) for a ticket. */
@@ -224,8 +225,11 @@ export class DshExecutor implements Executor {
   private readonly personal = new Map<string, string>()
   /** The timers of workers that go on after a passing failure, which dispose clears. */
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+  /** Execution timing records per ticket, written under the state directory for before-and-after comparison. */
+  private readonly timings: ExecutionTimers
   /** Registers the `launch` and `delivery` effect handlers; both are held (concurrency limit 0) while processing is paused. */
   constructor(private readonly host: ExecutorHost) {
+    this.timings = new ExecutionTimers(host.machine.stateDir)
     this.slots = new WorkerSlots(() => host.store.tickets.open().filter(ticket => this.running(ticket)).map(ticket => ticket.id),
       () => host.store.settings().executor.maxWorkers)
     // Each launch reserves a worker slot so launches run concurrently while slots are free.
@@ -246,19 +250,23 @@ export class DshExecutor implements Executor {
    */
   private async prepareDirectory(ticket: Ticket): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
-    await mkdir(dirname(directory), { recursive: true })
-    const command = this.host.store.settings().executor.prepare.trim()
-    const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
-    // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
-    const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
-    if (command) await runAsWorker(this.host.context.subprocess, ['sh', '-c', command], dirname(directory), signal, env)
-      .catch(async (error: unknown) => {
-        // Remove an empty directory left by a failed prepare command so a later retry does not treat it as already prepared.
-        await rmdir(directory).catch(() => { /* Absent, or holding what the command wrote, which the output explains. */ })
-        throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
-    await mkdir(directory, { recursive: true })
-    await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
+    const started = Date.now()
+    this.timings.attach(ticket.id, directory)
+    try {
+      await mkdir(dirname(directory), { recursive: true })
+      const command = this.host.store.settings().executor.prepare.trim()
+      const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
+      // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
+      const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
+      if (command) await runAsWorker(this.host.context.subprocess, ['sh', '-c', command], dirname(directory), signal, env)
+        .catch(async (error: unknown) => {
+          // Remove an empty directory left by a failed prepare command so a later retry does not treat it as already prepared.
+          await rmdir(directory).catch(() => { /* Absent, or holding what the command wrote, which the output explains. */ })
+          throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      await mkdir(directory, { recursive: true })
+      await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
+    } finally { this.timings.prepare(ticket.id, started, Date.now()) }
   }
   /** Enqueues a `launch` effect for an accepted or resumed assignment; launches start in queue order as worker slots free up. */
   start(ticket: Ticket, assignment: Assignment): void {
@@ -355,6 +363,7 @@ export class DshExecutor implements Executor {
    * report with no Input delivered since, and stops its shell jobs and subagents, including jobs it left to a person.
    */
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
+    this.timings.flush(ticket.id)
     this.transient.delete(assignment.id); this.transient.delete(`launch:${assignment.id}`)
     const report = assignment.report
     const busy = !!assignment.deliveredAt && !!report && assignment.deliveredAt >= report.at
@@ -399,6 +408,7 @@ export class DshExecutor implements Executor {
       await Promise.allSettled(running.map(agent => agent.whenIdle()))
     }
     await until(stop(), undefined, SHUTDOWN_STOP_MS)
+    this.timings.flushAll()
   }
   /** Number of open tickets whose worker holds a worker slot: its turn runs, or its shell jobs or subagents still run after its turn ended. */
   activeCount(): number { return this.host.store.tickets.open().filter(ticket => this.running(ticket)).length }
@@ -430,6 +440,7 @@ export class DshExecutor implements Executor {
     }
     const source = sourceTrigger(this.host, ticket)
     const workspace = ticket.execution?.directory ?? ''
+    this.timings.attach(ticket.id, workspace)
     if (!current()) return
     // Prepare the workspace directory once; an existing directory counts as already prepared, including worktrees created before `prepare` commands existed.
     if (!await stat(workspace).then(() => true, () => false)) {
@@ -494,7 +505,9 @@ export class DshExecutor implements Executor {
     // history: a step that claimed it may be cancelled or fail before, which drops it.
     this.disposers.push(ctx.on('session/event', (session, event) => {
       const ticketId = ticketOfSession(session.id)
-      if (event.type !== 'user/message' || ticketId === undefined || event.data.source.kind !== 'dsh-superagent' || this.host.closing()) return
+      if (ticketId === undefined || this.host.closing()) return
+      this.timings.observe(ticketId, event)
+      if (event.type !== 'user/message' || event.data.source.kind !== 'dsh-superagent') return
       const message = event.data
       void this.background(Promise.resolve().then(() => {
         const read = this.host.store.tickets.get(ticketId)?.inputs.filter(input => input.kind === 'trigger' && !input.readAt

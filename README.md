@@ -58,6 +58,9 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
+- [009 Local runtime setup](docs/009-local-runtime-setup.md)
+- [010 macOS UI design](docs/010-macos-ui-design.md)
+- [011 Workspace preparation](docs/011-workspace-prepare.md): clean worktrees, read-only business data, official query entries and timing
 
 ## Development
 

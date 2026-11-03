@@ -52,6 +52,8 @@ Before the first Assignment, if the Ticket directory does not exist, the prepare
 
 A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request belongs to the Ticket when its branch's last path segment matches the Ticket's short name.
 
+The built-in `prepare-workspace` helper is one such command: it refuses a source checkout with uncommitted tracked changes, creates a clean worktree, copies the business repository's declared shared data into it read-only, checks each file's cutoff and freshness, and writes a record at `DSH_SUPERAGENT_PREPARE_RECORD`. Its deployment profile names the checkout and data root, so the Harness core holds no business repository path. The worker reads the record before work and uses the official query entries it names. A missing file, unknown cutoff or stale file fails preparation with the file, cutoff and limit.
+
 ### Concurrency
 
 A Ticket holds a worker slot from the start of a launch, including preparation, or from the delivery that wakes its idle Executor. It also holds the slot throughout an active turn.
@@ -67,6 +69,8 @@ The prepare command and Executor instructions receive the same execution variabl
 | Variable | Registered by | Value |
 | --- | --- | --- |
 | `DSH_SUPERAGENT_DIR`, `DSH_SUPERAGENT_NAME`, `DSH_SUPERAGENT_TICKET` | Executor | The Ticket's directory, short name and id |
+| `DSH_SUPERAGENT_PREPARE_RECORD` | Executor | The prepare record: data provenance, cutoff, freshness, official query entries and preparation timing |
+| `DSH_SUPERAGENT_PREPARE_CLI` | Executor | This installation's built `prepare-workspace` helper |
 | `DSH_SUPERAGENT_BLOCKED_COMMANDS` | Executor | Commands the Executor may not run |
 | `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository the Source watches, `owner/name` |
 | `DSH_SUPERAGENT_GITHUB_ACCOUNT`, `DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL` | GitHub | The agent account and its commit email |

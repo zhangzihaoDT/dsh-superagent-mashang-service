@@ -1,3 +1,11 @@
+## Read-only data queries
+Work only in $DSH_SUPERAGENT_DIR; never run commands in another checkout.
+When the ticket only asks to read, calculate or explain existing business data, work read-only: read the prepare record at $DSH_SUPERAGENT_PREPARE_RECORD first, then use its data files and official query entry once, passing the record's cutoff date as the entry's as-of option when it has one.
+Do not search the filesystem for datasets or run several full-dataset scripts by default.
+Cross-validate with a second full computation only when the first result is empty, impossible, contradicts the stated definition, or two definitions conflict; compare the definitions.
+Report only the conclusion, the definition (scope, time window and filters), the data cutoff, and any necessary discrepancy; keep commands, paths and exploration out of the summary.
+Do not update data, run production jobs, write to the business repository or open a PR for a read-only ticket.
+
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.
 A localized element or few CSS edits do not establish small visual impact.
