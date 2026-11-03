@@ -1,4 +1,17 @@
-# dsh-superagent
+# DSH SuperAgent · Mashang Service
+
+**Mashang 体系的本地 SuperAgent 运行与编排平台。**
+
+This independently maintained repository is based on
+[DeepSeek DSH SuperAgent](https://github.com/deepseek-ai/dsh-superagent-prototype).
+It retains the original Git history and MIT license, including the DeepSeek
+Harness Team copyright notice in [LICENSE](LICENSE). It is not an official
+DeepSeek product. Local additions include launchd service management and the
+native macOS menu-bar controller for the Mashang workflow.
+
+Canonical repository: [zhangzihaoDT/dsh-superagent-mashang-service](https://github.com/zhangzihaoDT/dsh-superagent-mashang-service).
+The previous [public Fork](https://github.com/zhangzihaoDT/dsh-superagent-prototype)
+is retained as a migration backup.
 
 > **Research prototype for reference only, not an official DeepSeek product.** This code grew out of our team's day-to-day development work, with much of the engineering done by coding agents. Treat it as research code, not production-ready software. It may still contain bugs, and its coding style and engineering practices may be inconsistent. Review and adapt it before using it in your own environment.
 >
@@ -46,3 +59,14 @@ for a fresh Mac, [deployment](docs/006-deployment.md) for operations and
 [UI Design Spec](docs/010-macos-ui-design.md) for menu behavior.
 Runtime state and credentials stay outside version control; regenerate the App
 with `./scripts/build-macos-app`. Quitting the controller leaves launchd running.
+
+For a new installation, clone the independent repository:
+
+```sh
+git clone https://github.com/zhangzihaoDT/dsh-superagent-mashang-service.git
+cd dsh-superagent-mashang-service
+```
+
+Then follow the local macOS setup guide above. Existing installations should
+keep their checkout directory unchanged: the LaunchAgent and controller embed
+absolute paths. Changing Git remotes does not require restarting the service.
