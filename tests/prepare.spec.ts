@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { prepareWorkspace, type PrepareProfile } from '../src/prepare/workspace.ts'
+import { prepareWorkspace, PrepareProfileSchema, type PrepareProfile } from '../src/prepare/workspace.ts'
 
 let root: string
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' })
@@ -61,6 +61,20 @@ describe('prepareWorkspace', () => {
     expect(git(repo, 'status', '--porcelain', '--untracked-files=no')).toBe('')
     expect(JSON.parse(readFileSync(recordPath, 'utf8')).status).toBe('ready')
     expect(result.record.officialQueries).toEqual([{ id: 'orders', description: 'official orders', command: ['make', 'orders'], notes: '' }])
+  })
+
+  it('validates the example query contract and preserves it in the prepare record', async () => {
+    const example = JSON.parse(readFileSync(new URL('../examples/workspace-profiles/mashang-service.example.json', import.meta.url), 'utf8'))
+    const parsed = PrepareProfileSchema.parse(example)
+    const query = parsed.officialQueries[0]!
+    expect(query.contract?.result.fields.userCarLockedOrders).toBe('metrics.cumulative_user_car_lock_count')
+    expect(PrepareProfileSchema.safeParse({ ...example, officialQueries: [{ ...query,
+      contract: { ...query.contract, result: { ...query.contract!.result, collection: 123 } } }] }).success).toBe(false)
+    const repo = repository()
+    const recordPath = join(root, 'prepare.json')
+    await prepareWorkspace({ profile: profile(repo, { officialQueries: parsed.officialQueries }),
+      ticket: { id: 'contract-ticket', name: 'contract', directory: join(root, 'work', 'ticket') }, recordPath })
+    expect(JSON.parse(readFileSync(recordPath, 'utf8')).officialQueries).toEqual(parsed.officialQueries)
   })
 
   it('uses the business repository\'s declaration command and merges explicit entries over it', async () => {

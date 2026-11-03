@@ -94,6 +94,17 @@ The profile's `maxAgeHours` is a limit for a read-only analysis snapshot. It doe
 
 ## Read-only queries
 
+An official query can optionally declare a `contract`; older profiles without it keep their existing behavior. The [example profile](../examples/workspace-profiles/mashang-service.example.json) contains a launch-monitor contract with:
+
+- `appliesTo`: the questions and scopes the existing capability covers;
+- `arguments`: argv tokens appended to `command`, with named `{parameter}` placeholders;
+- `parameters`: where the worker obtains each parameter (the authorized request, prepared cutoff or a unique temporary output file);
+- `references`: repository-relative business references to read alongside applicable AGENTS.md instructions;
+- `result.file`: the saved JSON contract, `collection`: a dotted path to its result array, `match`: fields selecting exactly one array item, and `fields`: named dotted paths relative to that item;
+- `checks` and `investigateWhen`: scope/result validation and conditions requiring deeper investigation.
+
+This is descriptive metadata for the worker, not a new query engine: Prepare validates and preserves it without substituting parameters or executing expressions. Deployment authors keep commands, field mappings and references aligned with the existing repository capability; business logic stays in that capability. A contract does not supersede repository instructions, grant additional authority or certify a result. Missing/ambiguous selection, missing fields, warnings/errors or failed checks require investigation. Required references are read in a batch; normal successful standard queries then use the saved JSON rather than source-code exploration, mixed stdout or card markup. The cutoff comes from the prepared snapshot, and results are never checked against hardcoded acceptance numbers.
+
 The worker prompt tells a worker whose ticket only reads data to:
 
 - read the prepare record and work only in `$DSH_SUPERAGENT_DIR`;

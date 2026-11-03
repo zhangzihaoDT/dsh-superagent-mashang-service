@@ -50,3 +50,27 @@ Prepare 失败会回滚新建的 worktree 和分支。成功 Ticket 的快照保
 `pnpm check` 通过：类型检查、61 个测试文件 / 1,206 项测试，以及构建。`git diff --check` 通过。
 
 本机原始证据保留在被 Git 忽略的 `.artifacts/acceptance/`：正式运行 `ls9-acceptance-20261103-133458.json`、`20261103-133458-final-timing.json`、Prepare 记录、`verified-old-baseline.json` 及受干扰运行的记录。正式 Ticket 的 Prepare 和 execution-timings 原件也保留在 state 目录。
+
+## 查询契约优化复验（同日 14:28）
+
+在不修改业务仓库的前提下，为 `officialQueries` 增加可选 `contract`：适用范围、参数来源、必读参考、JSON 结果文件/唯一选择/字段映射、校验和异常调查条件。Prepare 校验并完整传递声明，不解释表达式或执行模板；旧 profile 保持兼容。示例与本机部署 profile 使用既有 `vehicle_sales_monitor.py`，未引入 LS9 Job 或复制指标计算逻辑。Worker 提示词要求消费保存的 Result Contract，并复用成功 Prepare 的快照校验证据；通用提示词仍在原字符预算内。
+
+第一次新样本 `f3c8ac9b92b0c68dc6e81a70801261e3` 的 Worker turn 为 46.513 秒，结果正确，但在所有结果检查通过后仍自行读取 parquet 复核快照，因此严格效率检查失败。保留失败记录，随后只明确了“成功 Prepare 的行数、checksum、cutoff、新鲜度不做例行重复核验”的边界；异常或矛盾仍需调查，没有删除校验或放宽验收条件。
+
+最终新 Ticket `2918eeb18b85390f607cbad477fab5ee` 通过全部 19 项验收：**21,655 / 用户车 20,872**，相同数据截止，官方查询执行一次，无 parquet 搜索、原始数据重复读取、外部 cd 或重复脚本。读取保存的 JSON Contract；匹配 generation/phase，核对状态、warnings/errors、scope、上市日和数值关系。worktree、数据副本和分支已清理，审计原件保留。
+
+| 指标 | 上一版正式样本 | 契约优化后正式样本 |
+| --- | ---: | ---: |
+| Prepare 外部命令 | 1.131 s | 1.177 s |
+| Worker turn | 142.819 s | 48.863 s |
+| 模型阶段 | 138.389 s | 45.812 s |
+| 工具阶段 | 4.186 s | 2.852 s |
+| 模型步骤 | 15 | 8 |
+| 工具调用 | 18 | 12 |
+| Prepare 开始至 turn 结束 | 144.032 s | 50.110 s |
+
+Worker turn 缩短约 66%，工具调用减少约 33%；官方脚本对应工具调用耗时 2.425 秒。以上为单次真实样本，不能分离模型服务延迟波动与流程优化的全部影响，也不保证固定时延。仍有目录查看和分批参考读取，尚未把所有操作合为一次工具调用；本轮未继续扩展改造。
+
+完整 `pnpm check` 通过（61 个文件 / 1,207 项测试、类型检查及构建）；最后的提示词边界修正又通过类型检查、model-surface/prepare 的 13 项相关测试及构建。最终 `git diff --check` 通过。两次激活均由独立 Codex 会话执行服务重启，没有 Worker 自重启；最终服务 PID 44434，GitHub、飞书和执行健康项全部 ready。
+
+原始证据：`.artifacts/acceptance/ls9-acceptance-20261103-142444.json`（失败样本）及 `ls9-acceptance-20261103-142721.json`（最终样本，已等待 turn/end 再采集计时与清理）。

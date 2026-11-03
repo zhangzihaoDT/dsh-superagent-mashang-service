@@ -21,10 +21,70 @@
   },
   "officialQueries": [
     {
-      "id": "official-query",
-      "description": "Name the repository's existing official read-only query entry here.",
-      "command": ["python3", "path/to/official_query.py", "--format", "json"],
-      "notes": "Keep writes, updates and production sends out of the worktree."
+      "id": "launch-monitor",
+      "description": "Existing read-only launch monitor; business definitions remain in the service repository.",
+      "command": [
+        "python3",
+        "mashang_workspace/business_scripts/vehicle_sales_monitor.py",
+        "--dry-run",
+        "--format",
+        "json"
+      ],
+      "notes": "Read-only snapshot query, never refresh or push.",
+      "contract": {
+        "appliesTo": "Cumulative locked orders and user-car locked orders since launch for one explicitly requested vehicle generation (e.g. LS9). Not presale, retained orders after refunds, sales shares, or data refresh/push requests.",
+        "arguments": [
+          "--series",
+          "{series}",
+          "--phase",
+          "launch",
+          "--force-phase",
+          "--as-of",
+          "{cutoffDate}",
+          "--output",
+          "{output}"
+        ],
+        "parameters": {
+          "series": "Generation explicitly named by the user, e.g. LS9. Do not infer a different generation from the current active phase.",
+          "cutoffDate": "YYYY-MM-DD date portion of the prepared order_data cutoff (lock_time); use that snapshot date, not the current wall-clock date.",
+          "output": "Unique absolute JSON filename under /tmp, including this ticket id; stdout is mixed Feishu card + JSON and is not the result file."
+        },
+        "references": [
+          "mashang_workspace/AGENTS.md",
+          "mashang_workspace/docs/data_dictionary.md",
+          "mashang_workspace/docs/metric_definitions.md",
+          "shared/schema/business_definition.json"
+        ],
+        "result": {
+          "file": "{output}",
+          "collection": "result.monitors",
+          "match": {
+            "generation": "{series}",
+            "phase": "launch"
+          },
+          "fields": {
+            "cumulativeLockedOrders": "metrics.cumulative_lock_count",
+            "userCarLockedOrders": "metrics.cumulative_user_car_lock_count",
+            "launchDate": "metrics.launch",
+            "observationCutoff": "metrics.obs",
+            "asOfDate": "metrics.as_of_date",
+            "excludedTestOrders": "metrics.test_orders_excluded",
+            "orderTypeFilledRatio": "metrics.order_type_filled_ratio"
+          }
+        },
+        "checks": [
+          "When Prepare status is ready, its checksum, row count, cutoff, read-only permissions and freshness are already verified evidence. Do not rehash, stat or read parquet to re-probe these facts, and do not probe the environment or inspect CLI source before using the supplied argv. Validate only the requested scope and saved query result below; investigate data/environment only if the official entry fails or a concrete contradiction appears.",
+          "Top-level status must be success with no errors; inspect warnings before accepting the answer.",
+          "scope.filters.series and phase must match the requested generation and launch; metrics.as_of_date must equal cutoffDate.",
+          "Both counts must be present, numeric nonnegative integers; userCarLockedOrders must not exceed cumulativeLockedOrders. Do not compare against any hardcoded expected result.",
+          "Read the relevant metric definitions and business_definition time_periods[series].end and monitor sections. Launch date must match time_periods[series].end. Cumulative locked orders is not refund-adjusted retained orders; user-car is the order_type 用户车 subset computed by the official entry.",
+          "State the actual prepare data cutoff; report a relevant incomplete order_type warning without silently adjusting the official count."
+        ],
+        "investigateWhen": [
+          "Entry fails, status is not success, warnings/errors occur, result file or fields are missing, selection is empty/ambiguous, or checks fail.",
+          "Requested metric, scope or definition is not covered by this contract or conflicts with required repository references. Investigate the specific conflict; a second full computation requires a concrete anomaly or definition conflict."
+        ]
+      }
     }
   ]
 }

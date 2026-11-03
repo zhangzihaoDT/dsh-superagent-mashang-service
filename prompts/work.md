@@ -1,10 +1,8 @@
 ## Read-only data queries
-Work only in $DSH_SUPERAGENT_DIR; never run commands in another checkout.
-When the ticket only asks to read, calculate or explain existing business data, work read-only: read the prepare record at $DSH_SUPERAGENT_PREPARE_RECORD first, then use its data files and official query entry once, passing the record's cutoff date as the entry's as-of option when it has one.
-Do not search the filesystem for datasets or run several full-dataset scripts by default.
-Cross-validate with a second full computation only when the first result is empty, impossible, contradicts the stated definition, or two definitions conflict; compare the definitions.
-Report only the conclusion, the definition (scope, time window and filters), the data cutoff, and any necessary discrepancy; keep commands, paths and exploration out of the summary.
-Do not update data, run production jobs, write to the business repository or open a PR for a read-only ticket.
+Work only in $DSH_SUPERAGENT_DIR. Read $DSH_SUPERAGENT_PREPARE_RECORD first. Trust ready Prepare; do not rehash/reprobe its snapshot. Use its cutoff and official entry. No data updates, production jobs, repository writes or PRs.
+For matching contract.appliesTo, batch-read applicable AGENTS.md and required references. Obey repository instructions. Bind contract.arguments argv from the request, cutoff and unique /tmp output. Do not execute placeholders.
+Execute once and read contract.result.file together when feasible, not mixed stdout/cards. Validate status/warnings/errors, scope and contract.checks; select exactly one result.collection item by result.match and extract result.fields relative to it. Missing/ambiguous matches or fields, warnings/errors and failed checks require investigation. On success, answer directly; skip source browsing, --help, environment probes and synonym searches. Investigate contract.investigateWhen or scope/definition conflicts. Without a contract, consult entry docs.
+Never search for datasets. Repeat full computation only for empty/impossible results or definition conflicts. Report conclusion, scope, filters, cutoff and discrepancies only.
 
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.

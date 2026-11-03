@@ -36,6 +36,20 @@ const OfficialQuerySchema = z.object({
   description: z.string().default(''),
   command: z.array(z.string().min(1)).min(1),
   notes: z.string().default(''),
+  contract: z.object({
+    appliesTo: z.string().trim().min(1),
+    arguments: z.array(z.string().min(1)),
+    parameters: z.record(z.string().min(1), z.string().min(1)),
+    references: z.array(RelativePath),
+    result: z.object({
+      file: z.string().min(1),
+      collection: z.string().min(1),
+      match: z.record(z.string().min(1), z.string().min(1)),
+      fields: z.record(z.string().min(1), z.string().min(1)),
+    }).strict(),
+    checks: z.array(z.string().min(1)).min(1),
+    investigateWhen: z.array(z.string().min(1)).min(1),
+  }).strict().optional(),
 }).strict()
 export type OfficialQuery = z.infer<typeof OfficialQuerySchema>
 /**
