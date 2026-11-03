@@ -37,3 +37,12 @@ Read the numbered documents in order; each builds only on the ones before it.
 ## License
 
 [MIT](LICENSE)
+
+## Local macOS runtime and menu-bar controller
+
+This fork adds a user LaunchAgent (`local.dsh.superagent`) and a native AppKit
+menu-bar controller. See [reproducible local setup](docs/009-local-runtime-setup.md)
+for a fresh Mac, [deployment](docs/006-deployment.md) for operations and
+[UI Design Spec](docs/010-macos-ui-design.md) for menu behavior.
+Runtime state and credentials stay outside version control; regenerate the App
+with `./scripts/build-macos-app`. Quitting the controller leaves launchd running.

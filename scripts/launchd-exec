@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""One-shot exec adapter: let the plugin's 30s crash lock expire, then replace ourselves with Node."""
+import os
+from pathlib import Path
+import sys
+import time
+lock = Path(sys.argv[1] + '.lock')
+while lock.exists():
+    try:
+        remaining = 31 - (time.time() - lock.stat().st_mtime)
+    except FileNotFoundError:
+        break
+    if remaining <= 0:
+        break
+    time.sleep(min(remaining, 1))
+os.execv(sys.argv[2], sys.argv[2:])

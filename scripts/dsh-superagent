@@ -25,6 +25,24 @@ ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = ROOT / '.artifacts'
 CONTROL = ARTIFACTS / 'control'
 KEEP_LOGS = 20
+PROJECT_SETUP = ARTIFACTS / 'superagent-setup'
+
+
+def configure_environment(profile):
+    """Use this checkout's installation for superagent, including inside an existing tmux server."""
+    paths = os.environ.get('PATH', '').split(os.pathsep)
+    if profile == 'superagent' and (PROJECT_SETUP / 'dsh-home').is_dir():
+        os.environ['DSH_HOME'] = str(PROJECT_SETUP / 'dsh-home')
+        paths.insert(0, str(PROJECT_SETUP / 'runtime' / 'node_modules' / '.bin'))
+    # Finder's PATH omits Homebrew. Append fallbacks without overriding caller tools.
+    paths.extend(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+    os.environ['PATH'] = os.pathsep.join(dict.fromkeys(filter(None, paths)))
+
+
+def startup_error(message, log):
+    detail = log.read_text(errors='replace')[-6000:] if log and log.exists() else ''
+    raise RuntimeError(message + '\nLog: ' + str(log or ARTIFACTS)
+                       + ('\n' + detail if detail else ''))
 
 
 def control(profile):
@@ -90,6 +108,7 @@ def state(url):
         entries = {name: entry if isinstance(entry, dict) else {} for name, entry in health.items()}
         return {'health': {name: entry.get('state') for name, entry in entries.items()},
                 'errors': {name: str(entry.get('detail', '')) for name, entry in entries.items() if entry.get('state') == 'error'},
+                'paused': value.get('paused', False),
                 'setup': setup.get('problem'), 'feishu': setup.get('feishuProblem')}
     except (OSError, ValueError, AttributeError):
         return None
@@ -123,7 +142,8 @@ def status(args):
     pids = processes(args.profile)
     current = state(args.url) if pids else None
     print(json.dumps({'pids': pids, 'cwd': str(ROOT), 'url': args.url,
-                      'manually_stopped': stopped(args.profile), 'health': current and current['health'],
+                      'manager': 'launchd' if (control(args.profile) / 'launchd-installed').exists() else 'tmux',
+                      'manually_stopped': stopped(args.profile), 'paused': current and current.get('paused', False), 'health': current and current['health'],
                       'errors': current and current['errors'], 'setup': current and current['setup'],
                       'feishu': current and current['feishu']}, ensure_ascii=False, indent=2))
     return outcome(pids, current)
@@ -157,12 +177,18 @@ def prune_logs(profile):
 
 
 def start(args):
+    log = None
     session = 'dsh-' + args.profile
     pids = processes(args.profile)
     if len(pids) > 1:
         raise RuntimeError('Multiple dsh-superagent processes found; refusing to start another.')
     if not pids:
         dsh = shutil.which('dsh')
+        if args.profile == 'superagent' and (PROJECT_SETUP / 'dsh-home').is_dir():
+            local_dsh = PROJECT_SETUP / 'runtime/node_modules/.bin/dsh'
+            if not local_dsh.is_file() or not os.access(local_dsh, os.X_OK):
+                raise RuntimeError(f'Project DSH executable is missing or not executable: {local_dsh}')
+            dsh = str(local_dsh)
         if not dsh or not shutil.which('tmux'):
             raise RuntimeError('Both dsh and tmux must be on PATH.')
         exists = subprocess.run(['tmux', 'has-session', '-t', '=' + session],
@@ -174,12 +200,18 @@ def start(args):
         log.touch()
         prune_logs(args.profile)
         # `exec` replaces the shell so the pane PID printed by tmux is the DSH service process itself.
-        command = ('umask 077; exec ' + shlex.join([dsh, '--profile', args.profile, '--no-open'])
+        environment = ['PATH=' + os.environ['PATH']]
+        if 'DSH_HOME' in os.environ:
+            environment.append('DSH_HOME=' + os.environ['DSH_HOME'])
+        command = ('umask 077; exec ' + shlex.join(['/usr/bin/env', *environment, dsh, '--profile', args.profile, '--no-open'])
                    + ' >> ' + shlex.quote(str(log)) + ' 2>&1')
         # Reuse an existing tmux session without disturbing other windows.
         target = ['new-window', '-t', '=' + session + ':'] if exists else ['new-session', '-s', session]
-        pane = subprocess.run(['tmux', *target, '-d', '-P', '-F', '#{pane_pid}', '-n', 'server', '-c', str(ROOT), command],
-                              check=True, capture_output=True, text=True).stdout.strip()
+        launched = subprocess.run(['tmux', *target, '-d', '-P', '-F', '#{pane_pid}', '-n', 'server', '-c', str(ROOT), command],
+                                  capture_output=True, text=True)
+        if launched.returncode:
+            startup_error('tmux could not start the service: ' + launched.stderr.strip(), log)
+        pane = launched.stdout.strip()
         if pane.isdigit():
             (control(args.profile) / 'service.pid').write_text(pane + '\n')
         print('Log: ' + str(log), flush=True)
@@ -203,12 +235,12 @@ def start(args):
             return code
         time.sleep(1)
     status(args)
-    raise RuntimeError('Startup health check timed out; inspect the log. Any running process was left intact.')
+    startup_error('Startup health check timed out. Any running process was left intact.', log)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'])
+    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status', 'install', 'uninstall', 'diagnose'])
     parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'superagent',
                         help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>.')
     parser.add_argument('--url', default=os.environ.get('DSH_SUPERAGENT_URL') or 'http://127.0.0.1:3082',
@@ -223,6 +255,7 @@ def main():
         parser.error('--timeout and --stop-timeout must be positive')
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', args.profile):
         parser.error('--profile must be a DSH profile name')
+    configure_environment(args.profile)
     os.umask(0o077)
     with (control(args.profile) / 'operation.lock').open('a') as lock:
         try:
@@ -234,6 +267,10 @@ def main():
             return 0
         if args.action == 'status':
             return status(args)
+        managed = args.profile == 'superagent' and (control(args.profile) / 'launchd-installed').exists()
+        if args.action in ('install', 'uninstall', 'diagnose') or managed:
+            import launchd_service
+            return launchd_service.dispatch(sys.modules[__name__], args)
         if args.action in ('stop', 'restart'):
             # Only a stop keeps automatic recovery off; a restart whose stop timed out leaves it on.
             stop(args, intentional=args.action == 'stop')

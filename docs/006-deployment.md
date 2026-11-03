@@ -272,3 +272,62 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | The log says the plugin is incompatible with the running dsh | Install a DeepSeek Harness version within the `engines.dsh` range |
 | The panel shows "Failed to load plugins" after a DeepSeek Harness upgrade | Restart the running instance |
 | Nothing happens after a mention | Check that the author is on the Source's allowed list, the Source is on, and processing is not paused. On GitHub, a mention added by editing an Issue's body is not received; mention the agent in a comment |
+
+## macOS menu-bar controller
+
+Build with `./scripts/build-macos-app` (Xcode Command Line Tools required).
+The generated `.artifacts/DSH SuperAgent.app` can be copied into `/Applications`
+or `~/Applications`. Rebuilding replaces only a recognized SuperAgent App.
+The App references this checkout and its build-time Python interpreter; rebuild
+after moving either. It uses a local ad-hoc signature.
+
+For the default `superagent` profile, the CLI automatically selects the project
+`.artifacts/superagent-setup/dsh-home` and local runtime. It explicitly passes
+DSH_HOME and PATH into tmux, so no terminal exports are required. Other profiles
+retain their own environment selection.
+
+The macOS App is now a native Swift/AppKit menu-bar controller. Launching it only
+checks status; use its DSH menu to start, stop, restart, open the console, inspect
+status details or open the log directory. Status refreshes every 15 seconds and
+shows Ready, Paused (executor paused), Stopped, or configuration/error guidance.
+Operations run off the UI thread. Quitting the controller leaves the service
+running; stopping requires selecting Stop explicitly. The existing CLI owns all
+service lifecycle behavior. Rebuild with `scripts/build-macos-app` and replace the
+installed App. The DSH whale icon and its #174A7C color are retained.
+
+## User launchd service (macOS)
+
+`local.dsh.superagent` is the user LaunchAgent label. Migration is explicit:
+
+```sh
+./scripts/dsh-superagent stop
+./scripts/dsh-superagent install
+./scripts/dsh-superagent status
+./scripts/dsh-superagent diagnose
+./scripts/dsh-superagent stop
+./scripts/dsh-superagent start
+./scripts/dsh-superagent restart
+./scripts/dsh-superagent uninstall
+```
+
+The plist is installed in `~/Library/LaunchAgents/local.dsh.superagent.plist`.
+RunAtLoad starts it on login; KeepAlive recovers process exits. Stop persistently
+disables the job and boots it out, so it stays stopped even at the next login.
+Start enables and bootstraps it again. Uninstall retains profiles, credentials,
+state and logs. Install again to restore management. A retained installation
+marker prevents accidental fallback to tmux after uninstall or a missing plist.
+
+launchd gets explicit HOME, project DSH_HOME, PATH, WorkingDirectory and separate
+stdout/stderr logs in `.artifacts/launchd/`. A one-shot exec adapter waits for the
+plugin's stale crash lock (30 seconds) before replacing itself with Node; it is
+not a watchdog. launchd directly owns the resulting long-running DSH PID.
+No tmux commands are used after installation. The legacy tmux path remains for
+unmigrated environments and regression coverage; do not start another supervisor
+for the installed profile. The menu-bar App uses the same CLI automatically.
+The earlier hourly recovery schedule is unnecessary after launchd installation.
+
+Diagnostics: `launchctl print gui/$(id -u)/local.dsh.superagent`,
+`launchctl print-disabled gui/$(id -u)`, and the logs above. A ready process does
+not prove plugin health: `status` retains its component errors/setup checks and
+exit codes 0/1/2/3. Login behavior is configured by RunAtLoad; verifying an actual
+logout/login must be done by the operator because it closes their desktop apps.

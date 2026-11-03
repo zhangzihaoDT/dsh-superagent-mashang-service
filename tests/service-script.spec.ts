@@ -232,3 +232,30 @@ it('does not signal a process that took the recorded service PID, and keeps a st
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(true)
 }, 20_000)
+
+it('passes the project home and local runtime explicitly into tmux, including with spaces in the checkout', async () => {
+  const setup = join(root, '.artifacts', 'superagent-setup')
+  mkdirSync(join(setup, 'dsh-home'), { recursive: true })
+  mkdirSync(join(setup, 'runtime', 'node_modules', '.bin'), { recursive: true })
+  writeFileSync(join(setup, 'runtime', 'node_modules', '.bin', 'dsh'),
+    `#!/bin/sh\nprintf '%s\\n' "$DSH_HOME" "$PATH" > '${root}/child-environment'\n`, { mode: 0o755 })
+  program('tmux', `case "$1" in has-session) exit 1;; new-*)
+for last in "$@"; do :; done
+# Simulate a server with stale environment; the pane command must override it.
+DSH_HOME=/wrong PATH=/usr/bin:/bin /bin/sh -c "$last"
+touch '${root}/launched'; cat '${root}/pane';; esac`)
+  const url = await answering()
+  const pid = sleeper()
+  writeFileSync(join(root, 'pane'), `${pid}\n`)
+  started(service(pid))
+  expect(await run('start', '--url', url)).toMatchObject({ code: 0 })
+  const [home, path] = readFileSync(join(root, 'child-environment'), 'utf8').split('\n')
+  expect(home).toBe(join(realpathSync(root), '.artifacts', 'superagent-setup', 'dsh-home'))
+  expect(path!.split(':')[0]).toBe(join(realpathSync(root), '.artifacts', 'superagent-setup', 'runtime/node_modules/.bin'))
+}, 20_000)
+
+it('reports tmux startup errors and the log path', async () => {
+  program('tmux', 'case "$1" in has-session) exit 1;; *) echo "cannot create session" >&2; exit 1;; esac')
+  expect(await run('start', '--url', 'http://127.0.0.1:9')).toMatchObject({ code: 1,
+    stderr: expect.stringContaining('tmux could not start the service: cannot create session') })
+})

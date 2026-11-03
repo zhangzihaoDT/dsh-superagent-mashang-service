@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Build a native AppKit application tied to this checkout; no third-party packages."""
+import argparse
+from pathlib import Path
+import plistlib
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def apple_string(value):
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / '.artifacts/DSH SuperAgent.app')
+    args = parser.parse_args()
+    output = args.output.expanduser().resolve()
+    if output.exists():
+        try:
+            existing = plistlib.loads((output / 'Contents/Info.plist').read_bytes())
+        except (OSError, ValueError):
+            parser.error(f'Refusing to replace an unrecognized output: {output}')
+        if existing.get('CFBundleIdentifier') != 'local.dsh.superagent.launcher':
+            parser.error(f'Refusing to replace another application: {output}')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as directory:
+        staged = Path(directory) / output.name
+        (staged / 'Contents/MacOS').mkdir(parents=True)
+        (staged / 'Contents/Resources').mkdir()
+        subprocess.run(['/usr/bin/xcrun', 'swiftc', str(ROOT / 'scripts/macos/controller.swift'),
+                        '-o', str(staged / 'Contents/MacOS/SuperAgent')], check=True)
+        (staged / 'Contents/Resources/Controller.plist').write_bytes(
+            plistlib.dumps({'root': str(ROOT), 'python': sys.executable}))
+        iconset = Path(directory) / 'SuperAgent.iconset'
+        subprocess.run(['/usr/bin/xcrun', 'swift', '-module-cache-path', str(Path(directory) / 'swift-cache'),
+                        str(ROOT / 'scripts/macos/icon.swift'), str(iconset)], check=True)
+        subprocess.run(['/usr/bin/iconutil', '-c', 'icns', str(iconset), '-o',
+                        str(staged / 'Contents/Resources/SuperAgent.icns')], check=True)
+        shutil.copyfile(Path(directory) / 'WhaleTemplate.png', staged / 'Contents/Resources/WhaleTemplate.png')
+        info = staged / 'Contents/Info.plist'
+        config = {'CFBundleExecutable': 'SuperAgent', 'CFBundlePackageType': 'APPL'}
+        config.update(CFBundleName='DSH SuperAgent', CFBundleDisplayName='DSH SuperAgent',
+                  CFBundleIdentifier='local.dsh.superagent.launcher', CFBundleVersion='4',
+                  CFBundleShortVersionString='2.1', CFBundleIconFile='SuperAgent.icns', LSUIElement=True)
+        info.write_bytes(plistlib.dumps(config))
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(staged)], check=True)
+        if output.exists():
+            shutil.rmtree(output)
+        staged.rename(output)
+    print(output)
+
+
+if __name__ == '__main__':
+    main()
