@@ -69,3 +69,15 @@ For routine development use a branch, pnpm check, build the App, and review the
 diff before committing. Use scripts/dsh-superagent status for read-only health;
 Git operations do not require service restarts. Do not commit `.artifacts/`, App
 bundles, logs, locks, authentication stores or machine-specific plists.
+
+## Repository boundary
+
+The orchestration repository and the business target are distinct. Installing
+this runtime or changing its Git origin must not change the GitHub Source's
+business target: `zhangzihaoDT/mashang-service` for the current Mashang setup.
+Keep that business clone/worktrees separate from this runtime checkout. Agent
+runtime, control UI and orchestration changes belong here; automotive data,
+metrics, ingestion/update jobs and analysis changes belong in mashang-service.
+Do not copy business code/data into the orchestration repository or merge the
+two repositories. Authorization to execute a task is not permission to relocate
+its business implementation.

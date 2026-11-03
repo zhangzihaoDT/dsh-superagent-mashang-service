@@ -2,6 +2,22 @@
 
 **Mashang 体系的本地 SuperAgent 运行与编排平台。**
 
+## 仓库职责边界
+
+本项目与现有 `mashang-service` 保持独立仓库、独立职责：
+
+| 仓库 | 负责内容 |
+| --- | --- |
+| `dsh-superagent-mashang-service` | Agent 运行与编排：launchd 生命周期、DSH 集成、任务路由与执行协调、权限策略、菜单栏控制器及 Web 管理控制台。 |
+| `mashang-service` | 汽车业务数据与分析：数据采集与更新、业务数据模型、指标口径、查询、分析及业务输出。 |
+
+两者通过明确授权的任务、业务仓库工作副本或已有业务接口协作。
+Agent 可以在 `mashang-service` 的任务工作副本中完成获授权的业务修改，
+业务代码与结果应交付回该业务仓库，不复制进本编排仓库。
+本仓库的名字表示服务于 Mashang 体系，不表示接管汽车业务实现；
+不得将两个仓库合并，也不得在这里另建一套业务数据或分析逻辑。
+
+
 This independently maintained repository is based on
 [DeepSeek DSH SuperAgent](https://github.com/deepseek-ai/dsh-superagent-prototype).
 It retains the original Git history and MIT license, including the DeepSeek
