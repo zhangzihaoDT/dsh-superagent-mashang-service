@@ -38,7 +38,7 @@ A missing required file, a missing cutoff, a stale file, a dirty checkout, an ex
     {
       "id": "launch-monitor",
       "description": "The repository's existing official read-only query entry.",
-      "command": ["python3", "mashang_workspace/business_scripts/vehicle_sales_monitor.py", "--dry-run", "--format", "json"],
+      "command": ["python3", "workspace/business_scripts/vehicle_sales_monitor.py", "--dry-run", "--format", "json"],
       "notes": "Add the requested filters; keep output under /tmp."
     }
   ]

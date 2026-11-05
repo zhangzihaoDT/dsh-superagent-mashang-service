@@ -25,7 +25,7 @@
       "description": "Existing read-only launch monitor; business definitions remain in the service repository.",
       "command": [
         "python3",
-        "mashang_workspace/business_scripts/vehicle_sales_monitor.py",
+        "workspace/business_scripts/vehicle_sales_monitor.py",
         "--dry-run",
         "--format",
         "json"
@@ -50,9 +50,10 @@
           "output": "Unique absolute JSON filename under /tmp, including this ticket id; stdout is mixed Feishu card + JSON and is not the result file."
         },
         "references": [
-          "mashang_workspace/AGENTS.md",
-          "mashang_workspace/docs/data_dictionary.md",
-          "mashang_workspace/docs/metric_definitions.md",
+          "workspace/AGENTS.md",
+          "docs/data_dictionary.md",
+          "shared/schema/schema.md",
+          "shared/schema/reference/metric_definitions.md",
           "shared/schema/business_definition.json"
         ],
         "result": {
