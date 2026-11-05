@@ -6,6 +6,7 @@ import type { Settings } from '../policy.ts'
 import type { Localized, VariableSpec } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 import { packagePath } from '../infra/paths.ts'
+import { businessRoot } from './business-jobs.ts'
 
 /** Variables registered by the Executor; `ticket` entries are populated only when a ticket is present. */
 export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] = [
@@ -14,6 +15,7 @@ export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] =
   { key: 'DSH_SUPERAGENT_TICKET', ticket: true, description: { zh: '工单 id', en: 'The ticket id' } },
   { key: 'DSH_SUPERAGENT_PREPARE_RECORD', ticket: true, description: { zh: '这个工单的 Prepare 记录：数据来源、截止时间、新鲜度、官方查询入口和耗时', en: 'This ticket\'s prepare record: data provenance, cutoff, freshness, official query entries and timing' } },
   { key: 'DSH_SUPERAGENT_PREPARE_CLI', description: { zh: '本 Harness 的 Prepare 辅助程序；prepare 命令可以调用它', en: 'This harness\'s workspace prepare helper; a prepare command may call it' } },
+  { key: 'DSH_SUPERAGENT_BUSINESS_ROOT', description: { zh: '生产业务仓库的主 checkout；受控 business_job 只在这里写入，Ticket worktree 不能写入', en: 'The production business repository\'s main checkout; the controlled business_job writes only here, never in a ticket worktree' } },
   { key: 'DSH_SUPERAGENT_BLOCKED_COMMANDS', description: { zh: '这个执行环境禁止调用的命令，以空格分隔；不要运行它们', en: 'Commands blocked in this execution environment, separated by spaces; never run them' } },
 ]
 export interface Variable { key: string; value: string; description: Localized; owner: string }
@@ -30,7 +32,7 @@ export function declaredVariables(sources: SourceRegistry, settings?: Settings):
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; stateDir: string; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '),
-    DSH_SUPERAGENT_PREPARE_CLI: packagePath('lib', 'prepare-workspace.js'),
+    DSH_SUPERAGENT_PREPARE_CLI: packagePath('lib', 'prepare-workspace.js'), DSH_SUPERAGENT_BUSINESS_ROOT: businessRoot(),
     ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id,
       DSH_SUPERAGENT_PREPARE_RECORD: join(input.stateDir, 'prepare', `${ticket.id}.json`) } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))

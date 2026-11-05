@@ -61,6 +61,8 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [009 Local runtime setup](docs/009-local-runtime-setup.md)
 - [010 macOS UI design](docs/010-macos-ui-design.md)
 - [011 Workspace preparation](docs/011-workspace-prepare.md): clean worktrees, read-only business data, official query entries and timing
+- [012 Prepare acceptance](docs/012-prepare-acceptance.md): the read-only Prepare acceptance record
+- [013 Controlled production data jobs](docs/013-business-jobs.md): allowlist-authorized `data-refresh-daily` from Feishu or the Web session, with lock, timeout and verification
 
 ## Development
 

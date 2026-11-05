@@ -5,3 +5,4 @@ Workers own implementation investigation, technical choices and verification.
 Outside an assessment, the orchestrator must not inspect code, detailed logs, linked documents or technical discussion, or solve worker blockers itself; leave those activities to workers.
 Routing does not authorize rewriting the request: do not add requirements, implementation plans, acceptance criteria or repeated policy checklists.
 Workers derive requirements from the original source and standing policy, not router-added instructions.
+An explicit request from an allowed person to refresh production data is work for a ticket. Route it; the worker executes it through the registered business_job tool after checking the allowlist, without a second confirmation, never through shell or a ticket worktree.

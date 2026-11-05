@@ -8,6 +8,8 @@ import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
+import type { BusinessJobs } from '../business-jobs.ts'
+import { BUSINESS_JOB_IDS } from '../business-jobs.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
 export interface ExecutorToolsHost {
@@ -15,6 +17,8 @@ export interface ExecutorToolsHost {
   readonly store: Pick<Store, 'tickets' | 'replyStatus' | 'atomic'>
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
   readonly resources: ResourceHost
+  /** Controlled production jobs; nil in a deployment without a business repository. */
+  readonly businessJobs: Pick<BusinessJobs, 'execute' | 'status'>
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
   sendReplies(): Promise<void>
@@ -23,6 +27,21 @@ export interface ExecutorToolsHost {
 export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   const ticketId = ticket.id
   return [
+    tool({
+      name: 'business_job',
+      description: 'Run or inspect a registered production data job. operation=run executes job_id=data-refresh-daily (make data-refresh-daily then data-status) immediately after verifying the request is from a human on this Source allowlist and the job is registered. No second confirmation. operation=status reads the latest run. Never use make or dataset updaters directly.',
+      schema: z.object({
+        operation: z.enum(['run', 'status']).describe('run: verify identity and start the registered job; status: read the latest run.'),
+        job_id: z.enum(BUSINESS_JOB_IDS).default('data-refresh-daily').describe('The registered job. data-refresh-daily refreshes order data and assigned leads, then verifies data status.'),
+        trigger_id: z.string().optional().describe('run: the human request message on this ticket; omit to use the newest human request.'),
+      }).strict(),
+      execute: async (args, signal) => {
+        const current = host.store.tickets.get(ticketId)
+        if (!current) throw new Error('Ticket not found')
+        if (args.operation === 'status') return await host.businessJobs.status(ticketId)
+        return await host.businessJobs.execute(current, args.job_id, args.trigger_id, signal)
+      },
+    }),
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',
       true, (resource, offset, limit, signal) => readResource(host.resources, resource, offset, limit, ticketId, signal)),
     tool({

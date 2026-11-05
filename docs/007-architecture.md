@@ -316,6 +316,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/core/memory.ts` | `MemoryRepositories`: the Store's repositories in memory, in the Store's order and with its nested rollback, for domain tests |
 | `src/core/index.ts` | The core's exports |
 | `src/app/runtime.ts` | The Runtime, the composition root, with its start and stop |
+| `src/app/business-jobs.ts` | The controlled production job path: the registered `data_refresh_daily` job, the production checkout, Source-allowlist authorization, direct execution, detached run and recovery of a settled service record |
 | `src/app/setup.ts` | Setup, and `setupChanged`, whether a save changes a field setup reads |
 | `src/app/passes.ts` | Passes, the pass scheduler |
 | `src/app/outbox.ts` | The Outbox: the Engine's `Outbox` port, the receipts and the `reply` effects that send them |
@@ -430,6 +431,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
+| `tests/business-jobs.spec.ts` | The controlled production job: explicit authorization, allowlisted direct execution, refusal of inferred/unauthorized/unknown jobs, status recovery and the detached launcher |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, the status of each kind of failure, the body limit, path parameters and queries |
 | `tests/settings.spec.ts` | Settings saves that race a model or account check, a Policy sync that a save outran, and the refusals of the pause, a sync and a block |

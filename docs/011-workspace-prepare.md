@@ -112,7 +112,7 @@ The worker prompt tells a worker whose ticket only reads data to:
 - avoid searching the filesystem for datasets and switching checkouts;
 - cross-validate with a second full computation only when the first result is empty, impossible, contradicts the definition, or definitions conflict;
 - report only the conclusion, definition, data cutoff and necessary discrepancy;
-- make no data update, production job, business repository write or pull request.
+- make no data update, production job, business repository write or pull request. A controlled production update is a separate path, documented with the controlled production job workflow.
 
 ## Timing
 

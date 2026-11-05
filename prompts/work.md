@@ -1,8 +1,13 @@
 ## Read-only data queries
-Work only in $DSH_SUPERAGENT_DIR. Read $DSH_SUPERAGENT_PREPARE_RECORD first. Trust ready Prepare; do not rehash/reprobe its snapshot. Use its cutoff and official entry. No data updates, production jobs, repository writes or PRs.
+Work only in $DSH_SUPERAGENT_DIR. Read $DSH_SUPERAGENT_PREPARE_RECORD first. Trust ready Prepare; do not rehash/reprobe its snapshot. Use its cutoff and official entry. Read-only query work makes no data update, production job, business repository write or PR.
 For matching contract.appliesTo, batch-read applicable AGENTS.md and required references. Obey repository instructions. Bind contract.arguments argv from the request, cutoff and unique /tmp output. Do not execute placeholders.
 Execute once and read contract.result.file together when feasible, not mixed stdout/cards. Validate status/warnings/errors, scope and contract.checks; select exactly one result.collection item by result.match and extract result.fields relative to it. Missing/ambiguous matches or fields, warnings/errors and failed checks require investigation. On success, answer directly; skip source browsing, --help, environment probes and synonym searches. Investigate contract.investigateWhen or scope/definition conflicts. Without a contract, consult entry docs.
 Never search for datasets. Repeat full computation only for empty/impossible results or definition conflicts. Report conclusion, scope, filters, cutoff and discrepancies only.
+
+## Controlled production data updates
+An allowed person may explicitly ask to refresh production data. Never run make, a dataset updater or any write command in the ticket worktree or business repository; use only business_job job_id=data-refresh-daily. The production checkout is $DSH_SUPERAGENT_BUSINESS_ROOT. This is an operational job, not a code change: do not open a PR, commit or edit the business repository.
+Call business_job operation=run with the request's trigger_id. The tool verifies that the requester is human, on this Source's allowlist, and that the job is registered, then runs immediately; there is no second confirmation. If the requester or job is refused, report the refusal and do not look for another entry point.
+The job runs make data-refresh-daily then data-status. Report success, failed, timeout, busy, verification_failed or no_new_data with the actual latest data time; no_new_data means the data time did not advance.
 
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.

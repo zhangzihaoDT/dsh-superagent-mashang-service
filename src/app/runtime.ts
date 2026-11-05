@@ -46,6 +46,7 @@ import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
+import { BusinessJobs, businessRoot } from './business-jobs.ts'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -66,6 +67,7 @@ export class Runtime extends Service implements SourceHost {
   readonly sessions: Sessions
   readonly settings: Settings
   readonly executor: DshExecutor
+  readonly businessJobs: BusinessJobs
   readonly assessor: MasterAssessor
   readonly outbox: Outbox
   readonly engine: Engine
@@ -96,6 +98,12 @@ export class Runtime extends Service implements SourceHost {
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
+      this.businessJobs = new BusinessJobs({
+        stateDir: machine.stateDir,
+        root: businessRoot,
+        readTrigger: id => store.triggers.get(id),
+        settings: () => store.settings(),
+      })
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings(), stateDir: machine.stateDir }) : undefined
@@ -161,6 +169,7 @@ export class Runtime extends Service implements SourceHost {
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
+        businessJobs: this.businessJobs,
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()

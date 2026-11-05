@@ -81,6 +81,8 @@ Ticket-specific values come from its directory and originating Trigger. Other va
 
 Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
 
+A production data update is not a shell command a worker may improvise. It uses the registered `business_job` tool, only for an explicitly authorized Ticket and a human requester on the Source's allowlist; the allowlist is the authorization and the registered job starts immediately, without a second confirmation. The tool starts the service repository's declared job in the production checkout, never in a Ticket worktree; the service job owns its lock, timeout, logs and result verification.
+
 These wrappers and directories establish defaults, not a security boundary. A worker can still execute a program by absolute path.
 
 ## Merging
