@@ -297,6 +297,8 @@ export interface Ticket {
   follows?: Follow[]
   /** People's questions the worker answered, whose answers the main Session may send. */
   answers?: string[]
+  /** User-facing text awaiting delivery, keyed by the original human trigger. */
+  answerTexts?: Record<string, string>
   createdAt: string
   updatedAt: string
   /** The Triggers it was accepted from: the one that started it, and the batch its Eval held. */

@@ -1,7 +1,7 @@
 /** Executor Session tools for reading ticket context, acknowledging requests, managing threads, handing back out-of-scope triggers, and reporting status. */
 import { z } from 'zod'
 import { liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
-import { IM_WORDS } from '../../infra/text.ts'
+import { IM_WORDS, wordCount } from '../../infra/text.ts'
 import { claimPull, readPull } from '../../sources/github-pull.ts'
 import type { SourceContext } from '../../sources/host.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
@@ -99,9 +99,14 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
         pr_number: z.number().int().positive().nullish().describe(`The ticket's PR: its source PR, or one by ${host.github.deployment.github.login} from a branch named after this ticket (DSH_SUPERAGENT_NAME).`),
-        reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
+        reply_text: z.string().trim().min(1).refine(text => wordCount(text) <= IM_WORDS, `At most ${IM_WORDS} words`).optional()
+          .describe('The user-facing answer only, paired with reply_to_trigger_id. Keep internal evidence and execution notes in summary.'),
+        reply_to_trigger_id: z.string().min(1).optional().describe('The explicit human question this report answers; never for ordinary progress.'),
       }).strict(),
       execute: async (args, signal) => {
+        if ((args.reply_to_trigger_id === undefined) !== (args.reply_text === undefined)) {
+          throw new Error('Submit reply_to_trigger_id and reply_text together.')
+        }
         const current = host.store.tickets.get(ticketId)
         if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
         const pull = args.pr_number != null ? await readPull(host.github, args.pr_number, signal) : undefined
@@ -111,7 +116,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
           if (refused) throw new Error(refused)
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
-            ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
+            ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id, replyText: args.reply_text } : {}) }
           const updated = host.engine.report(ticketId, report)
           const relay = reportRelay(updated, report)
           if (relay) host.sessions.relay(relay.id, relay.text)

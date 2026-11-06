@@ -17,6 +17,7 @@ export interface WorkerReport {
   askedBy?: string
   /** The person's question this report answers, which the worker thereby takes up; authorizes the main Session to send an answer reply. */
   answers?: string
+  replyText?: string
 }
 const RECOVERY_NOTE = 'The host restarted during this ticket. Inspect the current worktree, git history and GitHub state before continuing. Do not repeat an already completed external operation. Finish the original assignment and report its status.'
 
@@ -122,6 +123,9 @@ export class Assignments extends EnginePart {
     assignment.report = { state: report.state, summary: report.summary, at }
     ticket.updatedAt = at
     if (report.answers && !ticket.answers?.includes(report.answers)) ticket.answers = [...ticket.answers ?? [], report.answers]
+    if (report.answers && report.replyText) {
+      ticket.answerTexts = { ...ticket.answerTexts, [report.answers]: report.replyText }
+    }
     if (report.answers) this.takeUp(ticketId, report.answers)
     if (report.state === 'blocked' || report.state === 'failed') ticket.undelivered = ticket.undelivered.filter(id => !automatic(ticket.inputs.find(input => input.id === id)))
     this.repo.tickets.save(ticket)

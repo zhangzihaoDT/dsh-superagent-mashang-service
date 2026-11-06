@@ -185,7 +185,22 @@ async function drive(host: Host) {
   await runtime.idle()
   const [workerA, workerB] = [a, b].map(workerSessionId) as [string, string]
   await run(workerA, 'orchestrator_report', { state: 'progress', summary: 'Needs a decision.', human_action: 'Desktop too?' })
-  await run(workerA, 'orchestrator_report', { state: 'progress', summary: 'It reads the config.', human_action: null, reply_to_trigger_id: request.id })
+  const cm3 = feishu('10', '@bot CM3 上市以来各款式的销量比例是多少？', { root_id: 'om_1' })
+  await runtime.receive(cm3)
+  const replyText = '按零售锁单口径，CM3 上市至 2026-11-05 22:56 累计 8,024 单。Pro Max 59.4%，Max 39.1%，Ultra 1.5%。'
+  const summary = '退款审批时间为空的锁单 7,232 单。只读查询，未更新数据。'
+  const report = { state: 'progress', summary, human_action: null, reply_to_trigger_id: cm3.id }
+  await expect(run(workerA, 'orchestrator_report', report)).rejects.toThrow('Submit reply_to_trigger_id and reply_text together')
+  await run(workerA, 'orchestrator_report', { ...report, reply_text: replyText })
+  const cm3Reply = { purpose: 'answer', ticket_id: a, trigger_id: cm3.id, text: replyText }
+  await expect(run(master, 'orchestrator_reply', { ...cm3Reply, text: replyText + summary })).rejects.toThrow('verbatim')
+  await run(master, 'orchestrator_reply', cm3Reply)
+  expect(runtime.engine.reply({ purpose: 'answer', ticketId: a, triggerId: cm3.id, text: replyText }).reused).toBe(true)
+  const retained = feishu('11', '@bot 那退款审批时间为空的锁单，各款式占比是多少？', { root_id: 'om_1' })
+  await runtime.receive(retained)
+  const retainedText = '按退款审批时间为空的零售锁单计算，共 7,232 单。Pro Max 60.8%，Max 37.8%，Ultra 1.4%。'
+  await run(workerA, 'orchestrator_report', { ...report, reply_to_trigger_id: retained.id, reply_text: retainedText })
+  await run(master, 'orchestrator_reply', { ...cm3Reply, trigger_id: retained.id, text: retainedText })
   const other = feishu('9', '@bot 顺便看看这个')
   await runtime.receive(other)
   await run(master, 'orchestrator_route', { decisions: [{ kind: 'attach', ticket_id: a, trigger_id: other.id }] })

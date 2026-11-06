@@ -80,12 +80,15 @@ export class Replies extends EnginePart {
     const existing = this.options.outbox.status(id)
     const ready = !ticket || !trigger || ticket.answers?.includes(trigger.id)
     if (request.purpose === 'answer' && !ready && !existing) throw new UserError('noAnswer')
+    const replyText = request.purpose === 'answer' && trigger ? ticket?.answerTexts?.[trigger.id] : undefined
+    if (replyText !== undefined && request.text !== replyText) throw new UserError('answerTextMismatch')
     const asker = attention?.triggerId ? this.repo.triggers.get(attention.triggerId) : undefined
     const channel = request.purpose === 'answer' ? trigger!.channel : asker?.channel ?? (ticket ? this.sourceChannel(ticket) : undefined)
     if (!channel) throw new UserError('noChannel')
     this.options.outbox.send({ id, channel, text: request.text, kind: 'reply', ...ticket ? { ticketId: ticket.id } : {} })
     if (request.purpose === 'answer' && ticket && trigger && ticket.answers?.includes(trigger.id)) {
       ticket.answers = ticket.answers.filter(item => item !== trigger.id)
+      if (ticket.answerTexts) delete ticket.answerTexts[trigger.id]
       this.repo.tickets.save(ticket)
     }
     return { id, status: this.options.outbox.status(id) ?? 'pending', reused: existing !== undefined }
