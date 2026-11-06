@@ -33,6 +33,7 @@ let menuSymbols: [String: String] = [
     "停止服务": "stop.fill", "重启服务": "arrow.clockwise",
     "刷新状态": "arrow.triangle.2.circlepath", "查看状态详情": "info.circle",
     "打开日志目录": "folder", "高级选项": "gearshape",
+    "业务运行控制": "slider.horizontal.3",
     "退出控制器": "rectangle.portrait.and.arrow.right"
 ]
 func menuImage(_ symbol: String, description: String) -> NSImage? {
@@ -49,11 +50,11 @@ final class Controller: NSObject, NSApplicationDelegate {
     var item: NSStatusItem!
     let menu = NSMenu()
     var busy: String?
-    var timer: Timer?
     var lastOutput = "尚未获取状态"
     var view = ServiceView(title: "正在检查状态…", symbol: "clock", console: false)
     var configuration: [String: String] = [:]
     var fish: NSImage?
+    var businessWindow: BusinessRuntimeWindow?
     func applicationDidFinishLaunching(_ notification: Notification) {
         let peers = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier!)
         if let peer = peers.first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
@@ -71,8 +72,10 @@ final class Controller: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel("DSH SuperAgent")
         menu.autoenablesItems = false; item.menu = menu
         render(); refresh()
-        timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in self?.refresh() }
-        RunLoop.main.add(timer!, forMode: .common)
+        if CommandLine.arguments.contains("--business") { business() }
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        business(); return true
     }
     @discardableResult
     func entry(_ title: String, _ action: Selector?, in targetMenu: NSMenu? = nil, enabled: Bool = true) -> NSMenuItem {
@@ -88,6 +91,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         status.image = menuImage(busy != nil && busy != "status" ? "arrow.triangle.2.circlepath" : view.symbol, description: status.title)
         menu.addItem(.separator())
         entry("打开控制台", #selector(console), enabled: view.console && busy != "stop")
+        entry("业务运行控制", #selector(business))
         menu.addItem(.separator())
         if view.error { entry("查看状态详情", #selector(details)) }
         if view.stopped { entry("启动服务", #selector(start), enabled: busy == nil) }
@@ -137,11 +141,35 @@ final class Controller: NSObject, NSApplicationDelegate {
     @objc func restart() { run("restart") }
     @objc func refresh() { run("status") }
     @objc func console() { NSWorkspace.shared.open(URL(string: "http://127.0.0.1:3082")!) }
+    @objc func business() {
+        if businessWindow == nil {
+            businessWindow = BusinessRuntimeWindow(root: configuration["root"]!, python: configuration["python"]!, serviceRoot: configuration["serviceRoot"] ?? NSHomeDirectory() + "/Documents/github/mashang-service")
+        }
+        businessWindow?.showWindow(nil); NSApp.activate(ignoringOtherApps: true); businessWindow?.refresh()
+    }
     @objc func details() { show("SuperAgent 状态", lastOutput) }
     @objc func logs() { NSWorkspace.shared.open(URL(fileURLWithPath: configuration["root"]! + "/.artifacts/launchd")) }
     @objc func quitApp() { NSApp.terminate(nil) }
 }
-if CommandLine.arguments.contains("--test-states") {
+if CommandLine.arguments.contains("--test-business") {
+    runBusinessRuntimeTests()
+} else if CommandLine.arguments.contains("--preview-runtime") {
+    let app = NSApplication.shared; app.setActivationPolicy(.regular)
+    app.appearance = NSAppearance(named: CommandLine.arguments.contains("--dark") ? .darkAqua : .aqua)
+    let window = BusinessRuntimeWindow(root: "/preview", python: "/usr/bin/false", serviceRoot: "/preview/mashang-service", preview: true)
+    window.showWindow(nil); app.activate(ignoringOtherApps: true)
+    if let index = CommandLine.arguments.firstIndex(of: "--capture"), CommandLine.arguments.count > index + 1 {
+        let path = CommandLine.arguments[index + 1]
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let view = window.window!.contentView!; view.layoutSubtreeIfNeeded(); view.display()
+            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: path))
+            app.terminate(nil)
+        }
+    }
+    app.run()
+} else if CommandLine.arguments.contains("--test-states") {
     func check(_ json: String, _ code: Int32, _ title: String, _ stopped: Bool = false) {
         let v = ServiceView.read(json, code); precondition(v.title.contains(title) && v.stopped == stopped)
     }
@@ -176,6 +204,7 @@ if CommandLine.arguments.contains("--test-states") {
     precondition(c.menu.items.contains { $0.title == "启动服务" && $0.isEnabled })
     precondition(!c.menu.items.contains { $0.title == "停止服务" })
     precondition(c.menu.items.first { $0.title == "打开控制台" }?.isEnabled == false)
+    precondition(c.menu.items.first { $0.title == "业务运行控制" }?.isEnabled == true)
     verifyImages(c.menu)
     c.busy = "start"; c.render()
     precondition(c.menu.items.first { $0.title == "启动服务" }?.isEnabled == false)

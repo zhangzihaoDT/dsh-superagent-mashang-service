@@ -19,7 +19,9 @@ def apple_string(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / '.artifacts/DSH SuperAgent.app')
+    parser.add_argument('--service-root', type=Path, default=Path.home() / 'Documents/github/mashang-service')
     args = parser.parse_args()
+    service_root = str(args.service_root.expanduser().resolve())
     output = args.output.expanduser().resolve()
     if output.exists():
         try:
@@ -33,10 +35,13 @@ def main():
         staged = Path(directory) / output.name
         (staged / 'Contents/MacOS').mkdir(parents=True)
         (staged / 'Contents/Resources').mkdir()
-        subprocess.run(['/usr/bin/xcrun', 'swiftc', str(ROOT / 'scripts/macos/controller.swift'),
+        main_source = Path(directory) / 'main.swift'
+        shutil.copyfile(ROOT / 'scripts/macos/controller.swift', main_source)
+        subprocess.run(['/usr/bin/xcrun', 'swiftc', '-module-cache-path', str(Path(directory) / 'swift-cache'), str(main_source),
+                        str(ROOT / 'scripts/macos/BusinessRuntime.swift'), str(ROOT / 'scripts/macos/BusinessRuntimeTests.swift'),
                         '-o', str(staged / 'Contents/MacOS/SuperAgent')], check=True)
         (staged / 'Contents/Resources/Controller.plist').write_bytes(
-            plistlib.dumps({'root': str(ROOT), 'python': sys.executable}))
+            plistlib.dumps({'root': str(ROOT), 'python': sys.executable, 'serviceRoot': service_root}))
         iconset = Path(directory) / 'SuperAgent.iconset'
         subprocess.run(['/usr/bin/xcrun', 'swift', '-module-cache-path', str(Path(directory) / 'swift-cache'),
                         str(ROOT / 'scripts/macos/icon.swift'), str(iconset)], check=True)
@@ -46,8 +51,8 @@ def main():
         info = staged / 'Contents/Info.plist'
         config = {'CFBundleExecutable': 'SuperAgent', 'CFBundlePackageType': 'APPL'}
         config.update(CFBundleName='DSH SuperAgent', CFBundleDisplayName='DSH SuperAgent',
-                  CFBundleIdentifier='local.dsh.superagent.launcher', CFBundleVersion='4',
-                  CFBundleShortVersionString='2.1', CFBundleIconFile='SuperAgent.icns', LSUIElement=True)
+                  CFBundleIdentifier='local.dsh.superagent.launcher', CFBundleVersion='5',
+                  CFBundleShortVersionString='2.2', CFBundleIconFile='SuperAgent.icns', LSUIElement=True)
         info.write_bytes(plistlib.dumps(config))
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(staged)], check=True)
         if output.exists():
