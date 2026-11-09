@@ -74,6 +74,14 @@
               maxWaitTimeoutMs: 5000
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
+            config:
+              customSkillDirs:
+                - !!js >-
+                  process.env.DSH_SUPERAGENT_BUSINESS_SKILL_DIR?.trim() ||
+                  process.getBuiltinModule('node:path').join(
+                    process.env.DSH_SUPERAGENT_BUSINESS_ROOT?.trim() ||
+                    process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:os').homedir(), 'Documents/github/mashang-service'),
+                    '.opencode', 'skills')
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
           - id: compaction

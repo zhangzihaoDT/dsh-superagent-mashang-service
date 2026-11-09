@@ -6,10 +6,11 @@
  * until a high-risk approval path exists.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { mkdir, open, readFile, rename, stat } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import type { Settings } from '../policy.ts'
 import { allowedSender } from '../policy.ts'
 import { liveTicket, type Ticket, type TicketInput, type Trigger } from '../core/index.ts'
@@ -23,10 +24,13 @@ interface BusinessJobSpec {
   target: string
   description: string
   approval: BusinessJobApproval
+  datasets: readonly BusinessDatasetId[]
 }
 
 /** The only production jobs the agent may start. The service repository declares the matching `jobs` entry. */
-export const BUSINESS_JOB_IDS = ['data-refresh-daily'] as const
+export const BUSINESS_DATASET_IDS = ['order_data', 'assign_data', 'config_attribute', 'lock_attribution'] as const
+export type BusinessDatasetId = typeof BUSINESS_DATASET_IDS[number]
+export const BUSINESS_JOB_IDS = ['data-refresh-daily', 'data-refresh-config-attribute', 'data-refresh-lock-attribution'] as const
 export type BusinessJobId = typeof BUSINESS_JOB_IDS[number]
 export const BUSINESS_JOBS: Record<BusinessJobId, BusinessJobSpec> = {
   'data-refresh-daily': {
@@ -35,6 +39,23 @@ export const BUSINESS_JOBS: Record<BusinessJobId, BusinessJobSpec> = {
     target: 'data-refresh-daily',
     description: 'Runs make data-refresh-daily, then make data-status in the production checkout.',
     approval: 'none',
+    datasets: ['order_data', 'assign_data'],
+  },
+  'data-refresh-config-attribute': {
+    serviceJob: 'data_refresh_config_attribute',
+    label: '刷新并核验配置数据',
+    target: 'data-refresh-config-attribute',
+    description: 'Refreshes and verifies config_attribute only.',
+    approval: 'none',
+    datasets: ['config_attribute'],
+  },
+  'data-refresh-lock-attribution': {
+    serviceJob: 'data_refresh_lock_attribution',
+    label: '刷新并核验锁单归因',
+    target: 'data-refresh-lock-attribution',
+    description: 'Refreshes and verifies lock_attribution only.',
+    approval: 'none',
+    datasets: ['lock_attribution'],
   },
 }
 
@@ -55,7 +76,34 @@ export interface BusinessJobLast {
   summary?: string
   error?: string
 }
-interface BusinessJobRecord { version: 1; ticketId: string; last?: BusinessJobLast }
+interface MixSnapshot {
+  version: string
+  directory: string
+  configRunId: string
+  orderRunId?: string
+  result: MixResult
+}
+type MixResult = Record<string, unknown> & { order_cutoff: string }
+export interface RefreshSnapshotPlan {
+  jobs: BusinessJobId[]
+  datasets: BusinessDatasetId[]
+  continue_snapshot?: string
+}
+interface AnalysisSnapshot {
+  version: string
+  triggerId: string
+  directory: string
+  runs: { job: BusinessJobId; runId: string }[]
+  datasets: SnapshotDatasets
+}
+type SnapshotDatasets = Partial<Record<BusinessDatasetId, Record<string, unknown>>>
+interface BusinessJobRecord {
+  version: 1
+  ticketId: string
+  last?: BusinessJobLast
+  mixSnapshot?: MixSnapshot
+  analysisSnapshot?: AnalysisSnapshot
+}
 export type BusinessJobRun = Record<string, unknown> & { status?: string; summary?: string; error?: string; run_id?: string; record_path?: string }
 
 /** The production checkout. It is deliberately separate from the ticket worktree. */
@@ -68,8 +116,33 @@ export interface BusinessJobsOptions {
   readTrigger?: (id: string) => Trigger | undefined
   settings?: () => Settings
   now?: () => Date
+  snapshot?: typeof snapshotDatasets
+  queryMix?: (root: string, destination: string, verifiedMtime: string, signal: AbortSignal) => Promise<MixResult>
   /** Test seam: replaces the detached service-job launcher. */
   run?: (job: BusinessJobId, input: { root: string; runId: string; requestedBy: string; signal: AbortSignal }) => Promise<BusinessJobRun>
+}
+
+const exec = promisify(execFile)
+const verified = (result: BusinessJobRun) => result.status === 'success' || result.status === 'no_new_data'
+
+async function queryMix(root: string, destination: string, verifiedMtime: string, signal: AbortSignal): Promise<MixResult> {
+  const { stdout } = await exec(join(root, '.venv/bin/python'), [
+    '-B', '-m', 'jobs.ls8_mix', '--destination', destination, '--verified-mtime', verifiedMtime,
+  ], { cwd: root, signal, timeout: 120_000, maxBuffer: 1024 * 1024 })
+  return JSON.parse(stdout) as MixResult
+}
+
+async function snapshotDatasets(root: string, destination: string, datasets: BusinessDatasetId[], runIds: string[], signal: AbortSignal): Promise<SnapshotDatasets> {
+  const { stdout } = await exec(join(root, '.venv/bin/python'), [
+    '-B', '-m', 'jobs.snapshot', '--destination', destination,
+    ...datasets.flatMap(dataset => ['--dataset', dataset]),
+    ...runIds.flatMap(runId => ['--run-id', runId]),
+  ], { cwd: root, signal, timeout: 120_000, maxBuffer: 1024 * 1024 })
+  return JSON.parse(stdout) as SnapshotDatasets
+}
+
+function priorBusinessDate(now: Date): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date(now.getTime() - 86_400_000))
 }
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex')
@@ -202,62 +275,183 @@ export class BusinessJobs {
     const human = ticket.inputs.filter((item): item is Extract<TicketInput, { kind: 'trigger' }> =>
       item.kind === 'trigger' && !!item.human && !item.context)
     if (triggerId) {
-      const input = human.find(item => item.triggerId === triggerId)
-      const trigger = input ? this.readTrigger(triggerId) : undefined
-      if (!input || !trigger || !trigger.human) throw new Error('这条请求不属于该工单，或不是人类消息，拒绝生产写入。')
+      const inputs = ticket.inputs.filter(item => item.kind === 'trigger' && item.triggerId === triggerId)
+      const isOriginOnly = triggerId === ticket.origin.triggerId && inputs.length === 0
+      const trigger = isOriginOnly || human.some(item => item.triggerId === triggerId) ? this.readTrigger(triggerId) : undefined
+      if (!trigger?.human) throw new Error('这条请求不属于该工单，或不是人类消息，拒绝生产写入。')
       return trigger
     }
     const input = [...human].sort((left, right) => right.at.localeCompare(left.at))[0]
-    const resolved = input ? this.readTrigger(input.triggerId) : this.readTrigger(ticket.origin.triggerId)
-    if (!resolved || !resolved.human) throw new Error('找不到这条请求对应的人类消息，拒绝生产写入。')
-    return resolved
+    return this.requester(ticket, input?.triggerId ?? ticket.origin.triggerId)
+  }
+
+  private authorize(ticket: Ticket, jobs: BusinessJobId[], triggerId?: string): Trigger {
+    if (!liveTicket(ticket)) throw new Error('工单已结束，不能执行生产任务。')
+    if (ticket.mandate.strength !== 'explicit') throw new Error('只有被明确授权的工单可以执行生产任务；推断任务不允许。')
+    for (const job of jobs) {
+      if (!Object.hasOwn(BUSINESS_JOBS, job)) throw new Error(`未登记的生产 Job：${job}`)
+      if (BUSINESS_JOBS[job].approval !== 'none') throw new Error(`Job ${job} 属于高风险操作，需要审批；当前未启用审批执行，已拒绝。`)
+    }
+    const requester = this.requester(ticket, triggerId)
+    if (!allowedSender(this.settings(), requester.actor)) {
+      throw new Error('请求人不在当前 Source 的用户白名单中，拒绝生产写入。')
+    }
+    return requester
+  }
+
+  /** Runs an authorized refresh plan and binds a single new version after all steps verify. */
+  async refreshSnapshot(ticket: Ticket, plan: RefreshSnapshotPlan, triggerId: string | undefined, signal: AbortSignal): Promise<Record<string, unknown>> {
+    return await this.exclusive(ticket.id, async () => {
+      const { jobs, datasets, continue_snapshot: previousVersion } = plan
+      const requester = this.authorize(ticket, jobs, triggerId)
+      if (!jobs.length || new Set(jobs).size !== jobs.length || !datasets.length
+        || new Set(datasets).size !== datasets.length || datasets.some(key => !BUSINESS_DATASET_IDS.includes(key))
+        || jobs.some(job => !BUSINESS_JOBS[job].datasets.some(key => datasets.includes(key)))) {
+        throw new Error('刷新计划须包含不重复的已登记 Job 和查询数据集，每个 Job 须覆盖至少一个查询数据集。')
+      }
+      const record = await this.record(ticket.id)
+      const previous = record.analysisSnapshot
+      if (previousVersion && (previous?.version !== previousVersion || previous.triggerId !== requester.id)) {
+        throw new Error('只能继续同一请求当前绑定的快照。')
+      }
+      const runs = previousVersion && previous ? [...previous.runs] : []
+      const results = []
+      const root = this.root()
+      const refreshStart = performance.now()
+      for (const job of jobs) {
+        signal.throwIfAborted()
+        const run = await this.runJob(record, job, root, triggerLabel(requester).slice(0, 200), signal)
+        results.push({ job, run_id: run.runId, ...compactRun(run.result) })
+        if (!verified(run.result)) return { status: run.result.status, failed_job: job, refreshes: results,
+          timing_ms: { refresh_and_verify: Math.round(performance.now() - refreshStart) } }
+        runs.push({ job, runId: run.runId })
+      }
+      signal.throwIfAborted()
+      const snapshotStart = performance.now()
+      const timing = () => ({
+        refresh_and_verify: Math.round(snapshotStart - refreshStart),
+        snapshot_and_bind: Math.round(performance.now() - snapshotStart),
+      })
+      const version = randomUUID()
+      const directory = join(this.options.stateDir, 'business-jobs', 'snapshots', pathSafe(ticket.id), version)
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      try {
+        const inputs = await (this.options.snapshot ?? snapshotDatasets)(root, directory, datasets, runs.map(run => run.runId), signal)
+        if (Object.keys(inputs).length !== datasets.length || datasets.some(key => !Object.hasOwn(inputs, key))) {
+          throw new Error('快照数据集与查询计划不一致')
+        }
+        signal.throwIfAborted()
+        const snapshot = { version, directory, triggerId: requester.id, runs, datasets: inputs }
+        const snapshotPath = join(directory, 'snapshot.json')
+        await writeJson(snapshotPath, snapshot)
+        signal.throwIfAborted()
+        record.analysisSnapshot = snapshot
+        await writeJson(this.path(ticket.id), record)
+        return { status: 'success', snapshot, snapshot_path: snapshotPath, refreshes: results, timing_ms: timing() }
+      } catch (error) {
+        await rm(directory, { recursive: true, force: true }).catch(() => {})
+        return { status: 'snapshot_failed', error: error instanceof Error ? error.message : String(error), refreshes: results, timing_ms: timing() }
+      }
+    })
   }
 
   /** Verifies identity, Source allowlist and the job allowlist, then runs the registered service job immediately. */
-  async execute(ticket: Ticket, job: BusinessJobId, triggerId: string | undefined, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async execute(ticket: Ticket, job: BusinessJobId, triggerId: string | undefined, signal: AbortSignal, ls8Mix = false): Promise<Record<string, unknown>> {
     return await this.exclusive(ticket.id, async () => {
-      if (!liveTicket(ticket)) throw new Error('工单已结束，不能执行生产任务。')
-      if (ticket.mandate.strength !== 'explicit') throw new Error('只有被明确授权的工单可以执行生产任务；推断任务不允许。')
-      if (!Object.hasOwn(BUSINESS_JOBS, job)) throw new Error(`未登记的生产 Job：${job}`)
-      const spec = BUSINESS_JOBS[job]
-      if (spec.approval !== 'none') throw new Error(`Job ${job} 属于高风险操作，需要审批；当前未启用审批执行，已拒绝。`)
-
-      const requester = this.requester(ticket, triggerId)
-      if (!allowedSender(this.settings(), requester.actor)) {
-        throw new Error('请求人不在当前 Source 的用户白名单中，拒绝生产写入。')
-      }
-
-      const runId = `dsh-${randomUUID().replaceAll('-', '')}`
-      const startedAt = this.now().toISOString()
+      const requester = this.authorize(ticket, [job], triggerId)
+      if (ls8Mix && job !== 'data-refresh-config-attribute') throw new Error('LS8 Mix requires the configuration refresh job')
+      signal.throwIfAborted()
+      const root = this.root()
       const record = await this.record(ticket.id)
       const requestedBy = triggerLabel(requester).slice(0, 200)
-      record.last = {
-        id: runId, job, status: 'running', runId, startedAt, requestedBy,
-        serviceRecordPath: join(this.root(), 'logs/production-jobs/records', `${runId}.json`),
-      }
-      await writeJson(this.path(ticket.id), record)
+      const config = await this.runJob(record, job, root, requestedBy, signal)
+      const response = { job, run_id: config.runId, status: config.result.status, result: compactRun(config.result) }
+      if (!ls8Mix || !verified(config.result) || signal.aborted) return response
+
+      const after = config.result.after as { config_attribute?: { file_mtime?: string } } | undefined
+      const mtime = after?.config_attribute?.file_mtime
+      if (!mtime) return { ...response, mix_status: 'failed', mix_error: '配置核验记录缺少文件更新时间' }
+      let orderRun: Awaited<ReturnType<BusinessJobs['runJob']>> | undefined
+      let candidate: MixSnapshot | undefined
       try {
-        const result = await this.run(job, { root: this.root(), runId, requestedBy, signal })
-        const status = typeof result.status === 'string' ? result.status : 'failed'
-        record.last = {
-          ...record.last,
-          status,
-          finishedAt: this.now().toISOString(),
-          summary: typeof result.summary === 'string' ? result.summary : undefined,
-          error: typeof result.error === 'string' ? result.error : undefined,
-          serviceRecordPath: typeof result.record_path === 'string' ? result.record_path : record.last.serviceRecordPath,
+        const requiredDate = priorBusinessDate(this.now())
+        candidate = await this.prepareMix(ticket.id, root, config.runId, mtime, signal)
+        if (candidate.result.order_cutoff.slice(0, 10) < requiredDate) {
+          await rm(candidate.directory, { recursive: true, force: true })
+          candidate = undefined
+          signal.throwIfAborted()
+          if (BUSINESS_JOBS['data-refresh-daily'].approval !== 'none') throw new Error('订单刷新需要审批')
+          orderRun = await this.runJob(record, 'data-refresh-daily', root, requestedBy, signal)
+          if (!verified(orderRun.result) || signal.aborted) {
+            return { ...response, mix_status: 'failed', order_refresh: compactRun(orderRun.result) }
+          }
+          candidate = await this.prepareMix(ticket.id, root, config.runId, mtime, signal, orderRun.runId)
         }
+        signal.throwIfAborted()
+        const orderStale = candidate.result.order_cutoff.slice(0, 10) < requiredDate
+        if (orderStale) {
+          return { ...response, mix_status: 'stale_orders', order_cutoff: candidate.result.order_cutoff,
+            required_order_date: requiredDate, order_refresh: orderRun && compactRun(orderRun.result) }
+        }
+        record.mixSnapshot = candidate
         await writeJson(this.path(ticket.id), record)
-        return { job, run_id: runId, status, result: compactRun(result) }
+        const snapshot = candidate
+        candidate = undefined
+        return { ...response, mix_status: 'success', snapshot, order_refresh: orderRun && compactRun(orderRun.result) }
       } catch (error) {
-        record.last = {
-          ...record.last, status: 'failed', finishedAt: this.now().toISOString(),
-          error: error instanceof Error ? error.message : String(error),
-        }
-        await writeJson(this.path(ticket.id), record)
-        throw error
+        return { ...response, mix_status: 'failed', mix_error: error instanceof Error ? error.message : String(error) }
+      } finally {
+        if (candidate) await rm(candidate.directory, { recursive: true, force: true }).catch(() => {})
       }
     })
+  }
+
+  /** Stage a new read-only snapshot. The caller binds it only after all checks succeed. */
+  private async prepareMix(ticketId: string, root: string, configRunId: string, mtime: string, signal: AbortSignal, orderRunId?: string): Promise<MixSnapshot> {
+    const version = randomUUID()
+    const directory = join(this.options.stateDir, 'business-jobs', 'snapshots', pathSafe(ticketId), version)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    try {
+      const result = await (this.options.queryMix ?? queryMix)(root, directory, mtime, signal)
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(result.order_cutoff)) throw new Error('订单截止时间无效')
+      const snapshot = { version, directory, configRunId, ...(orderRunId && { orderRunId }), result }
+      await writeJson(join(directory, 'snapshot.json'), snapshot)
+      return snapshot
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true }).catch(() => {})
+      throw error
+    }
+  }
+
+  private async runJob(record: BusinessJobRecord, job: BusinessJobId, root: string, requestedBy: string, signal: AbortSignal): Promise<{ runId: string; result: BusinessJobRun }> {
+    const runId = `dsh-${randomUUID().replaceAll('-', '')}`
+    const startedAt = this.now().toISOString()
+    record.last = {
+      id: runId, job, status: 'running', runId, startedAt, requestedBy,
+      serviceRecordPath: join(root, 'logs/production-jobs/records', `${runId}.json`),
+    }
+    await writeJson(this.path(record.ticketId), record)
+    try {
+      const result = await this.run(job, { root, runId, requestedBy, signal })
+      const status = typeof result.status === 'string' ? result.status : 'failed'
+      record.last = {
+        ...record.last,
+        status,
+        finishedAt: this.now().toISOString(),
+        summary: typeof result.summary === 'string' ? result.summary : undefined,
+        error: typeof result.error === 'string' ? result.error : undefined,
+        serviceRecordPath: typeof result.record_path === 'string' ? result.record_path : record.last.serviceRecordPath,
+      }
+      await writeJson(this.path(record.ticketId), record)
+      return { runId, result: { ...result, status } }
+    } catch (error) {
+      record.last = {
+        ...record.last, status: 'failed', finishedAt: this.now().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      }
+      await writeJson(this.path(record.ticketId), record)
+      throw error
+    }
   }
 
   /** Returns the latest run, recovering a settled service record after a host restart. */
@@ -277,7 +471,8 @@ export class BusinessJobs {
           await writeJson(this.path(ticketId), record)
         }
       }
-      return { last: record.last ?? null, job: record.last?.job ?? null }
+      return { last: record.last ?? null, job: record.last?.job ?? null, ...(record.mixSnapshot && { mix_snapshot: record.mixSnapshot }),
+        ...(record.analysisSnapshot && { analysis_snapshot: record.analysisSnapshot }) }
     })
   }
 }
@@ -287,6 +482,6 @@ const triggerLabel = (trigger: Pick<Trigger, 'id' | 'actor'>): string => `trigge
 /** The part of a service record a worker and its report need; the full record stays in the service log directory. */
 function compactRun(result: BusinessJobRun): Record<string, unknown> {
   const keys = ['status', 'summary', 'error', 'run_id', 'latest_data_time', 'latest_data_time_by_dataset', 'changed_datasets',
-    'new_data', 'warnings', 'commands', 'log_path', 'record_path']
+    'new_data', 'warnings', 'commands', 'duration_s', 'log_path', 'record_path']
   return Object.fromEntries(keys.filter(key => key in result).map(key => [key, result[key]]))
 }

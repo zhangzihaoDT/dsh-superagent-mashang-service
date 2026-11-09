@@ -9,7 +9,7 @@ import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
 import type { BusinessJobs } from '../business-jobs.ts'
-import { BUSINESS_JOB_IDS } from '../business-jobs.ts'
+import { BUSINESS_DATASET_IDS, BUSINESS_JOB_IDS } from '../business-jobs.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
 export interface ExecutorToolsHost {
@@ -18,7 +18,7 @@ export interface ExecutorToolsHost {
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
   readonly resources: ResourceHost
   /** Controlled production jobs; nil in a deployment without a business repository. */
-  readonly businessJobs: Pick<BusinessJobs, 'execute' | 'status'>
+  readonly businessJobs: Pick<BusinessJobs, 'execute' | 'status' | 'refreshSnapshot'>
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
   sendReplies(): Promise<void>
@@ -29,17 +29,31 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   return [
     tool({
       name: 'business_job',
-      description: 'Run or inspect a registered production data job. operation=run executes job_id=data-refresh-daily (make data-refresh-daily then data-status) immediately after verifying the request is from a human on this Source allowlist and the job is registered. No second confirmation. operation=status reads the latest run. Never use make or dataset updaters directly.',
+      description: 'Authorized production refresh. refresh_snapshot runs a fixed plan and binds read-only inputs; use it for refresh plus analysis. run_ls8_mix is the LS8 fallback.',
       schema: z.object({
-        operation: z.enum(['run', 'status']).describe('run: verify identity and start the registered job; status: read the latest run.'),
-        job_id: z.enum(BUSINESS_JOB_IDS).default('data-refresh-daily').describe('The registered job. data-refresh-daily refreshes order data and assigned leads, then verifies data status.'),
-        trigger_id: z.string().optional().describe('run: the human request message on this ticket; omit to use the newest human request.'),
+        operation: z.enum(['run', 'status', 'run_ls8_mix', 'refresh_snapshot']),
+        job_id: z.enum(BUSINESS_JOB_IDS).optional(),
+        trigger_id: z.string().optional().describe('Omit to resolve the human request automatically.'),
+        plan: z.object({
+          jobs: z.array(z.enum(BUSINESS_JOB_IDS)).min(1).max(BUSINESS_JOB_IDS.length),
+          datasets: z.array(z.enum(BUSINESS_DATASET_IDS)).min(1).max(BUSINESS_DATASET_IDS.length),
+          continue_snapshot: z.string().uuid().optional(),
+        }).strict().optional(),
       }).strict(),
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
         if (!current) throw new Error('Ticket not found')
+        if (args.operation === 'refresh_snapshot') {
+          if (!args.plan || args.job_id) throw new Error('refresh_snapshot requires a plan')
+          return await host.businessJobs.refreshSnapshot(current, args.plan, args.trigger_id, signal)
+        }
+        if (args.plan) throw new Error('plan is only accepted by refresh_snapshot')
         if (args.operation === 'status') return await host.businessJobs.status(ticketId)
-        return await host.businessJobs.execute(current, args.job_id, args.trigger_id, signal)
+        if (args.operation === 'run_ls8_mix') {
+          if (args.job_id && args.job_id !== 'data-refresh-config-attribute') throw new Error('run_ls8_mix requires the configuration job')
+          return await host.businessJobs.execute(current, 'data-refresh-config-attribute', args.trigger_id, signal, true)
+        }
+        return await host.businessJobs.execute(current, args.job_id ?? 'data-refresh-daily', args.trigger_id, signal)
       },
     }),
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',

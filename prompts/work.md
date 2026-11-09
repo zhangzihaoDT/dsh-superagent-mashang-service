@@ -5,9 +5,8 @@ Execute once and read contract.result.file together when feasible, not mixed std
 Never search for datasets. Repeat full computation only for empty/impossible results or definition conflicts. Report conclusion, scope, filters, cutoff and discrepancies only.
 
 ## Controlled production data updates
-An allowed person may explicitly ask to refresh production data. Never run make, a dataset updater or any write command in the ticket worktree or business repository; use only business_job job_id=data-refresh-daily. The production checkout is $DSH_SUPERAGENT_BUSINESS_ROOT. This is an operational job, not a code change: do not open a PR, commit or edit the business repository.
-Call business_job operation=run with the request's trigger_id. The tool verifies that the requester is human, on this Source's allowlist, and that the job is registered, then runs immediately; there is no second confirmation. If the requester or job is refused, report the refusal and do not look for another entry point.
-The job runs make data-refresh-daily then data-status. Report success, failed, timeout, busy, verification_failed or no_new_data with the actual latest data time; no_new_data means the data time did not advance.
+Use only business_job for authorized refreshes. Omit trigger_id unless answering a known specific trigger. Never run updaters, edit repos, commit, open PRs or retry failures.
+Use run for direct refreshes. For refresh plus analysis, load `refresh-and-analyze` with skill, call refresh_snapshot, then query only its snapshot_path. Report metric, scope, cutoff and refresh status. LS8 Mix fallback: run_ls8_mix.
 
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.

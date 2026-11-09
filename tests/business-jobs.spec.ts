@@ -156,3 +156,132 @@ it('registers business_job for a worker, not for the main Session, and refuses a
     expect(await h.runTool(sessionId, 'business_job', { operation: 'status' })).toMatchObject({ last: null })
   } finally { await h.stop() }
 })
+
+it('routes the combined worker tool to the fixed config job on the current ticket', async () => {
+  const { feishu, startRuntime } = await import('./fixtures/host.ts')
+  const h = await startRuntime()
+  try {
+    const { sessionId } = await h.acceptedTicket(feishu('1', '@bot 刷新 LS8 配置并查询内饰 Mix'))
+    const execute = vi.spyOn(h.runtime.businessJobs, 'execute').mockResolvedValue({ mix_status: 'success' })
+    await expect(h.runTool(sessionId, 'business_job', { operation: 'run_ls8_mix', job_id: 'data-refresh-daily' }))
+      .rejects.toThrow('requires the configuration job')
+    expect(execute).not.toHaveBeenCalled()
+    expect(await h.runTool(sessionId, 'business_job', { operation: 'run_ls8_mix' })).toMatchObject({ mix_status: 'success' })
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ mandate: expect.anything() }),
+      'data-refresh-config-attribute', undefined, expect.any(AbortSignal), true)
+  } finally { await h.stop() }
+})
+
+it('runs the allowlisted configuration job and binds a new version after each verified Mix', async () => {
+  const { directory, triggers, settings, ticket } = fixture()
+  const run = vi.fn(async () => ({ status: 'no_new_data', after: { config_attribute: { file_mtime: 'verified-mtime' } } }))
+  const queryMix = vi.fn(async () => ({ order_cutoff: '2026-11-04T18:00:00', groups: {} }))
+  const jobs = new BusinessJobs({ stateDir: directory, readTrigger: id => triggers.get(id), settings: () => settings,
+    now: () => new Date(NOW), run, queryMix })
+  const execute = () => jobs.execute(ticket, 'data-refresh-config-attribute', TRIGGER, new AbortController().signal, true)
+  const first = await execute() as { snapshot: { directory: string; version: string } }
+  expect(first).toMatchObject({ mix_status: 'success', status: 'no_new_data' })
+  expect(run.mock.calls).toHaveLength(1)
+  expect(run).toHaveBeenCalledWith('data-refresh-config-attribute', expect.anything())
+  expect(queryMix).toHaveBeenCalledWith(expect.any(String), first.snapshot.directory, 'verified-mtime', expect.anything())
+
+  run.mockResolvedValueOnce({ status: 'verification_failed', after: { config_attribute: { file_mtime: 'verified-mtime' } } })
+  expect(await execute()).toMatchObject({ status: 'verification_failed' })
+  expect(queryMix).toHaveBeenCalledTimes(1)
+  expect(await jobs.status(ticket.id)).toMatchObject({ mix_snapshot: { version: first.snapshot.version } })
+
+  queryMix.mockRejectedValueOnce(new Error('copy failed'))
+  expect(await execute()).toMatchObject({ mix_status: 'failed' })
+  expect(await jobs.status(ticket.id)).toMatchObject({ mix_snapshot: { version: first.snapshot.version } })
+
+  const second = await execute() as typeof first
+  expect(second.snapshot.version).not.toBe(first.snapshot.version)
+  expect(await jobs.status(ticket.id)).toMatchObject({ mix_snapshot: { version: second.snapshot.version } })
+  expect(JSON.parse(readFileSync(join(first.snapshot.directory, 'snapshot.json'), 'utf8'))).toMatchObject(first.snapshot)
+})
+
+it.each(['success', 'failed', 'still_stale'])('uses daily only for stale orders and binds after verified fresh inputs (%s)', async outcome => {
+  const { directory, triggers, settings, ticket } = fixture()
+  const run = vi.fn()
+    .mockResolvedValueOnce({ status: 'success', after: { config_attribute: { file_mtime: 'verified-mtime' } } })
+    .mockResolvedValueOnce({ status: outcome === 'failed' ? 'failed' : 'no_new_data' })
+  const queryMix = vi.fn()
+    .mockResolvedValueOnce({ order_cutoff: '2026-11-03T18:00:00' })
+    .mockResolvedValueOnce({ order_cutoff: outcome === 'still_stale' ? '2026-11-03T18:00:00' : '2026-11-04T18:00:00' })
+  const jobs = new BusinessJobs({ stateDir: directory, readTrigger: id => triggers.get(id), settings: () => settings,
+    now: () => new Date(NOW), run, queryMix })
+  const result = await jobs.execute(ticket, 'data-refresh-config-attribute', TRIGGER, new AbortController().signal, true)
+  expect(run.mock.calls.map(([job]) => job)).toEqual(['data-refresh-config-attribute', 'data-refresh-daily'])
+  expect(queryMix).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 2)
+  if (outcome === 'success') {
+    expect(result).toMatchObject({ mix_status: 'success', snapshot: { orderRunId: expect.any(String) } })
+  } else {
+    expect(result.mix_status).toBe(outcome === 'failed' ? 'failed' : 'stale_orders')
+    expect(await jobs.status(ticket.id)).not.toHaveProperty('mix_snapshot')
+  }
+})
+
+it('binds a generic snapshot only after all authorized jobs verify and keeps previous versions', async () => {
+  const { directory, triggers, settings, ticket } = fixture()
+  const run = vi.fn().mockResolvedValue({ status: 'success' })
+  const snapshot = vi.fn().mockResolvedValue({ config_attribute: { path: 'config' }, order_data: { path: 'orders' } })
+  const jobs = new BusinessJobs({ stateDir: directory, readTrigger: id => triggers.get(id), settings: () => settings, run, snapshot })
+  const signal = new AbortController().signal
+  const plan = { jobs: ['data-refresh-config-attribute'], datasets: ['config_attribute', 'order_data'] } as const
+  const execute = (nextJobs = [...plan.jobs] as ('data-refresh-config-attribute' | 'data-refresh-daily')[], previous?: string) =>
+    jobs.refreshSnapshot(ticket, { jobs: nextJobs, datasets: [...plan.datasets], continue_snapshot: previous }, TRIGGER, signal)
+  const first = await execute() as { snapshot: { version: string; directory: string; runs: { runId: string }[] } }
+  expect(first).toMatchObject({ status: 'success' })
+  expect(first).toMatchObject({ snapshot_path: join(first.snapshot.directory, 'snapshot.json'),
+    timing_ms: { refresh_and_verify: expect.any(Number), snapshot_and_bind: expect.any(Number) } })
+  run.mockResolvedValueOnce({ status: 'success' }).mockResolvedValueOnce({ status: 'verification_failed' })
+  expect(await execute(['data-refresh-config-attribute', 'data-refresh-daily'])).toMatchObject({
+    status: 'verification_failed', failed_job: 'data-refresh-daily',
+  })
+  expect(snapshot).toHaveBeenCalledTimes(1)
+  snapshot.mockRejectedValueOnce(new Error('source changed'))
+  expect(await execute()).toMatchObject({ status: 'snapshot_failed' })
+  expect(await jobs.status(ticket.id)).toMatchObject({ analysis_snapshot: { version: first.snapshot.version } })
+  await expect(execute(['data-refresh-daily'], 'stale-version')).rejects.toThrow('当前绑定')
+  const next = await execute(['data-refresh-daily'], first.snapshot.version) as typeof first
+  expect(next.snapshot.version).not.toBe(first.snapshot.version)
+  expect(next.snapshot.runs[0]).toEqual(first.snapshot.runs[0])
+  expect(snapshot).toHaveBeenLastCalledWith(expect.any(String), next.snapshot.directory,
+    [...plan.datasets], next.snapshot.runs.map(item => item.runId), signal)
+  expect(JSON.parse(readFileSync(join(first.snapshot.directory, 'snapshot.json'), 'utf8'))).toMatchObject(first.snapshot)
+})
+
+it('resolves a primary origin-only trigger but refuses context, secondary origins, and non-human origins', async () => {
+  const { directory, triggers, settings, ticket, origin } = fixture()
+  const run = vi.fn().mockResolvedValue({ status: 'success' })
+  const snapshot = vi.fn().mockResolvedValue({ config_attribute: { path: 'config' }, order_data: { path: 'orders' } })
+  const jobs = new BusinessJobs({ stateDir: directory, readTrigger: id => triggers.get(id), settings: () => settings, run, snapshot })
+  const originOnly = { ...ticket, inputs: [], origin: { triggerId: TRIGGER, triggerIds: [TRIGGER, FOLLOWUP] } }
+  const plan = { jobs: ['data-refresh-config-attribute'], datasets: ['config_attribute', 'order_data'] } as const
+  const execute = (current: Ticket, id?: string) => jobs.refreshSnapshot(current,
+    { jobs: [...plan.jobs], datasets: [...plan.datasets] }, id, new AbortController().signal)
+  await expect(execute(originOnly, TRIGGER)).resolves.toMatchObject({ snapshot: { triggerId: TRIGGER } })
+  await expect(execute(originOnly)).resolves.toMatchObject({ snapshot: { triggerId: TRIGGER } })
+  const current = await jobs.status(ticket.id)
+  triggers.set(FOLLOWUP, { ...origin, id: FOLLOWUP })
+  await expect(execute(originOnly, FOLLOWUP)).rejects.toThrow('拒绝生产写入')
+  const context = ticket.inputs[0]!
+  await expect(execute({ ...originOnly, inputs: [{ ...context, context: true } as typeof context] })).rejects.toThrow('拒绝生产写入')
+  triggers.set(TRIGGER, { ...origin, human: false })
+  await expect(execute(originOnly, TRIGGER)).rejects.toThrow('拒绝生产写入')
+  expect(run).toHaveBeenCalledTimes(2)
+  expect(await jobs.status(ticket.id)).toEqual(current)
+})
+
+it('rejects an unrelated job and unauthorized generic refresh before starting a write', async () => {
+  const { jobs, ticket, runner } = fixture()
+  const signal = new AbortController().signal
+  await expect(jobs.refreshSnapshot(ticket, { jobs: ['data-refresh-daily'], datasets: ['config_attribute'] }, TRIGGER, signal))
+    .rejects.toThrow('覆盖至少一个')
+  expect(runner).not.toHaveBeenCalled()
+  const unauthorized = fixture({ allowed: false })
+  await expect(unauthorized.jobs.refreshSnapshot(unauthorized.ticket, {
+    jobs: ['data-refresh-lock-attribution'], datasets: ['lock_attribution'],
+  }, TRIGGER, signal)).rejects.toThrow('白名单')
+  expect(unauthorized.runner).not.toHaveBeenCalled()
+})
