@@ -9,6 +9,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+
 SPEC = importlib.util.spec_from_file_location('business_runtime', Path(__file__).resolve().parents[1] / 'scripts/business_runtime.py')
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
@@ -231,7 +233,12 @@ def phase_of(bdef, generation, today): return 'launch'
         def plans(at):
             return runtime.build_plans(self.root, dashboard, [], batches, (8,50), sampled=datetime.fromisoformat(at))
         self.assertEqual([p['status'] for p in plans('2026-11-05T10:00:00+08:00')], ['SUCCESS','FAILED','IDLE'])
+        key_day = plans('2026-11-05T20:00:00+08:00')
+        self.assertEqual([p['nextAt'] for p in key_day], [
+            '2026-11-06T08:50:00+08:00', '2026-11-05T21:00:00+08:00', None,
+        ])
         next_day = plans('2026-11-06T07:00:00+08:00')
+        self.assertEqual(next_day[1]['nextAt'], '2026-11-06T08:50:00+08:00')
         self.assertEqual(next_day[1]['dueAt'], '2026-11-05T23:00:00+08:00')
         self.assertEqual(next_day[1]['status'], 'UNKNOWN')
         self.assertEqual(plans('2026-11-06T10:00:00+08:00')[0]['status'], 'UNKNOWN')
@@ -239,25 +246,6 @@ def phase_of(bdef, generation, today): return 'launch'
     def test_missing_business_configuration_is_not_an_empty_active_list(self):
         self.assertIn('不可核验', runtime.today_overview(self.root, {}, []))
 
-    @unittest.skipUnless(os.environ.get('DSH_TEST_NATIVE_PROCESSES') == '1', 'requires macOS process probing; uses only a temporary fixture')
-    def test_native_scheduler_lifecycle_in_temporary_repository(self):
-        (self.root / runtime.SCRIPT).write_text('import time\nFULL_REFRESH_TIME = (8, 50)\nwhile True: time.sleep(1)\n')
-        self.make('sales-scheduler:\n\t@.venv/bin/python workspace/utility_scripts/sales_scheduler.py\n')
-        self.manager.request('scheduler', 'up')  # creates only the fixture state directory
-        spawn = runtime.subprocess.Popen
-        def retain_scheduler(*args, **kwargs):
-            child = spawn(*args, **kwargs)
-            if args[0][0] == '/usr/bin/caffeinate': self.runners.append(child)
-            return child
-        with patch.object(runtime.subprocess, 'Popen', retain_scheduler):
-            try:
-                self.manager.start_scheduler()
-                self.assertEqual(self.manager.status()['snapshot']['services'][0]['status'], 'ONLINE')
-                self.manager.start_scheduler()  # adoption must not start a duplicate
-                self.assertEqual(len(self.runners), 1)
-            finally:
-                self.manager.stop_scheduler()
-        self.assertEqual(self.manager.status()['snapshot']['services'][0]['status'], 'OFFLINE')
 
 
 if __name__ == '__main__':

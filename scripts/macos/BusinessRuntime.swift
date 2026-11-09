@@ -29,6 +29,7 @@ struct RuntimePlan: Decodable {
     var manualTarget: String?; var dueAt: String?; var lastAt: String?; var note: String
     var controlId: String?
     var logDate: String?
+    var nextAt: String?
 }
 func planStatus(_ status: String) -> String {
     ["SUCCESS":"成功", "FAILED":"失败", "RUNNING":"执行中", "PENDING":"待执行", "UNKNOWN":"待核实", "IDLE":"无记录", "PENDING_APPROVAL":"待确认"][status] ?? "待核实"
@@ -38,6 +39,15 @@ func businessCanRunPlan(_ target: String, state: RuntimeEnvelope?, controls: [Ru
     ready && state?.usable() == true && state?.snapshot?.schedulerBusy != true && state?.snapshot?.plans?.contains(where: { $0.manualTarget == target }) == true &&
         !controls.contains(where: { $0.unsettled }) && !(state?.snapshot?.plans?.contains(where: { $0.status == "RUNNING" }) ?? true)
 }
+struct SchedulerSettings: Decodable {
+    var series: String; var phase: String; var timezone: String
+    var autoRestore: Bool; var desired: Bool; var confirmed: Bool; var source: String
+}
+struct SchedulerHealth: Decodable {
+    var heartbeatAt: String?; var state: String?; var reason: String?
+    var startedAt: String?; var lastExitAt: String?; var childPid: Int?
+    var series: String?; var phase: String?
+}
 struct RuntimeSnapshot: Decodable {
     var services: [RuntimeEntry]
     var jobs: [RuntimeEntry]
@@ -46,6 +56,10 @@ struct RuntimeSnapshot: Decodable {
     var dashboard: TodayDashboard?
     var plans: [RuntimePlan]?
     var schedulerBusy: Bool?
+    var schedulerSettings: SchedulerSettings?
+    var schedulerHealth: SchedulerHealth?
+    var loginRestoreInstalled: Bool?
+    var schedulerNextAt: String?
 }
 struct RuntimeEnvelope: Decodable {
     var available: Bool
@@ -149,17 +163,15 @@ final class LocalRuntimeClient {
 
 private extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
 
+private let consoleBackground = NSColor(white: 250.0 / 255, alpha: 1)
+private let consoleInk = NSColor(srgbRed: 32.0 / 255, green: 33.0 / 255, blue: 36.0 / 255, alpha: 1)
+private let consoleMuted = NSColor(white: 122.0 / 255, alpha: 1)
+private let consoleRule = NSColor(white: 234.0 / 255, alpha: 1)
+
 private final class RuntimeCanvas: NSView {
     override var isFlipped: Bool { true }
-    override func layout() {
-        super.layout()
-        if let stack = subviews.first as? NSStackView {
-            let height = stack.fittingSize.height + 52
-            if abs(frame.height - height) > 1 { setFrameSize(NSSize(width: frame.width, height: height)) }
-        }
-    }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill(); NSBezierPath(rect: dirtyRect).fill()
+        consoleBackground.setFill(); NSBezierPath(rect: dirtyRect).fill()
     }
 }
 
@@ -203,6 +215,9 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
     private let detail = NSTextField(wrappingLabelWithString: "选择执行记录查看详情。")
     private let refreshButton = NSButton(title: "刷新", target: nil, action: nil)
     private var actionButtons: [NSButton] = []
+    private let schedulerButton = NSButton(title: "启动调度", target: nil, action: nil)
+    private let settingsButton = NSButton(title: "调度设置…", target: nil, action: nil)
+    private let schedulerDetail = NSTextField(wrappingLabelWithString: "")
     private var historyWindow: NSWindowController?
     private var plans: [RuntimePlan] { snapshot?.snapshot?.plans ?? [] }
     private var available: Bool { !preview && connected && snapshot?.usable() == true && !polling && !submitting }
@@ -211,11 +226,13 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
 
     init(root: String, python: String, serviceRoot: String, preview: Bool = false) {
         self.preview = preview; client = LocalRuntimeClient(root: root, python: python, serviceRoot: serviceRoot)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 430),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 432),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = RuntimeCanvas(frame: window.contentView!.bounds)
         window.title = preview ? "业务运行 · 界面预览（模拟数据）" : "业务运行 · Mashang"
-        window.minSize = NSSize(width: 880, height: 360); window.isReleasedWhenClosed = false; window.center()
+        window.minSize = NSSize(width: 880, height: 420); window.isReleasedWhenClosed = false; window.center()
         build()
         if preview { loadPreview() } else { refresh() }
     }
@@ -228,32 +245,52 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
         let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.spacing = 10; stack.alignment = .centerY; return stack
     }
     private func stack(in view: NSView) -> NSStackView {
-        let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 14
+        let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 8
         root.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(root)
-        NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+        NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
             root.topAnchor.constraint(equalTo: view.topAnchor, constant: 18), root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18)])
         return root
     }
     private func full(_ view: NSView, in root: NSStackView) { root.addArrangedSubview(view); view.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true }
+    private func styleButton(_ button: NSButton) {
+        button.bezelStyle = .rounded
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+    }
     private func build() {
         let root = stack(in: window!.contentView!)
         refreshButton.target = self; refreshButton.action = #selector(refresh)
         let logs = NSButton(title: "调度日志", target: self, action: #selector(showLogs))
-        full(row([label("业务运行", size: 21, bold: true), NSView(), refreshButton, logs]), in: root)
-        connection.font = .systemFont(ofSize: 12); connection.textColor = .secondaryLabelColor; full(connection, in: root)
-        for (id, title, width) in [("name", "Plan", 190.0), ("schedule", "运行计划", 220.0), ("state", "最近执行状态", 340.0), ("action", "操作", 110.0)] {
+        full(row([label("业务运行", size: 21, bold: true), NSView(), refreshButton, logs, settingsButton]), in: root)
+        connection.font = .systemFont(ofSize: 15, weight: .semibold)
+        schedulerButton.target = self; schedulerButton.action = #selector(schedulerAction(_:))
+        settingsButton.target = self; settingsButton.action = #selector(schedulerSettings)
+        for button in [refreshButton, logs, settingsButton, schedulerButton] { styleButton(button) }
+        schedulerButton.bezelColor = consoleInk
+        full(row([connection, NSView(), schedulerButton]), in: root)
+        for (id, title, width) in [("name", "Plan", 190.0), ("schedule", "下一次执行", 220.0), ("state", "最近状态", 310.0), ("action", "操作", 145.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id)); column.title = title; column.width = width
             planTable.addTableColumn(column)
         }
         planTable.dataSource = self; planTable.delegate = self; planTable.rowHeight = 76
-        planTable.columnAutoresizingStyle = .uniformColumnAutoresizingStyle; planTable.usesAlternatingRowBackgroundColors = true
+        planTable.columnAutoresizingStyle = .uniformColumnAutoresizingStyle; planTable.usesAlternatingRowBackgroundColors = false
+        planTable.backgroundColor = .white; planTable.gridColor = consoleRule
+        planTable.gridStyleMask = .solidHorizontalGridLineMask
+        planTable.intercellSpacing = NSSize(width: 12, height: 0)
         planTable.selectionHighlightStyle = .none
-        let scroll = NSScrollView(); scroll.documentView = planTable; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.documentView = planTable; scroll.hasVerticalScroller = true; scroll.borderType = .noBorder
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = 9
+        scroll.layer?.masksToBounds = true
+        scroll.layer?.borderWidth = 1
+        scroll.layer?.borderColor = consoleRule.cgColor
         full(scroll, in: root); scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
-        feedback.font = .systemFont(ofSize: 12); feedback.textColor = .secondaryLabelColor; full(feedback, in: root)
+        feedback.font = .systemFont(ofSize: 12); feedback.textColor = consoleMuted; full(feedback, in: root)
         let history = NSButton(title: "执行记录与审批…", target: self, action: #selector(showHistory))
-        full(row([history, NSView(), label("手动刷新 · 不自动补执行", size: 11)]), in: root)
+        styleButton(history)
+        schedulerDetail.font = .systemFont(ofSize: 11); schedulerDetail.textColor = consoleMuted
+        full(row([history, NSView(), schedulerDetail]), in: root)
         update()
     }
     @objc private func showHistory() {
@@ -292,6 +329,7 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
         cancel.isEnabled = available && selected?.cancellable == true && (selected?.pending == true || selected?.op == "run")
         review.isEnabled = available && selected?.status == "UNKNOWN"
         for button in actionButtons { button.isEnabled = businessCanSubmit("scheduler", op: button.identifier!.rawValue, state: snapshot, controls: controls, ready: available) }
+        updateScheduler()
         detail.stringValue = selected.map { "\($0.controlId)\n\(runtimeStatus($0.status)) · \($0.reason ?? "暂无附加信息")" + ($0.code.map { " · 退出码 \($0)" } ?? "") } ?? "暂无所选记录。可在此确认、取消或核验结果未知的操作。"
     }
     @objc func refresh() { reload() }
@@ -311,9 +349,6 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
                     case .success(let values):
                         let selectedID = self.selected?.controlId
                         self.snapshot = envelope; self.controls = values; self.connected = true
-                        let scheduler = envelope.snapshot?.services.first { $0.id == "scheduler" }?.status
-                        let state = scheduler == "ONLINE" ? "运行中" : scheduler == "OFFLINE" ? "已停止" : "异常"
-                        self.connection.stringValue = "Scheduler：\(state)  ·  最近刷新 \(runtimeTime(envelope.receivedAt))" + (envelope.usable() ? "" : " · 状态已过期，请刷新")
                         self.table.reloadData()
                         if let index = self.controls.firstIndex(where: { $0.controlId == selectedID }) { self.table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false) }
                         self.update()
@@ -329,7 +364,7 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
         connection.stringValue = "Scheduler：异常 · 状态读取失败，保留值不代表当前状态"
         feedback.stringValue = error.localizedDescription; update()
     }
-    // Only track explicitly accepted local jobs; no periodic status/UI refresh.
+    // Follow accepted operations in addition to periodic status refresh.
     private func watch(_ control: RuntimeControl) {
         guard watching.insert(control.controlId).inserted, !preview else { return }
         client.request("wait", body:["controlId":control.controlId]) { [weak self] (result:Result<RuntimeControl,Error>) in
@@ -369,9 +404,90 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
         }
         mutate("request",body:["targetId":target,"op":"run"],autoApprove:true)
     }
+    private func updateScheduler() {
+        let data = snapshot?.snapshot
+        let status = data?.services.first { $0.id == "scheduler" }?.status
+        let config = data?.schedulerSettings
+        let health = data?.schedulerHealth
+        let pending = controls.first { $0.targetId == "scheduler" && !$0.pending && $0.unsettled }
+        let valid = preview || (connected && snapshot?.usable() == true)
+        let stopping = pending?.op == "down" || pending?.op == "restart" ||
+            (status == "ONLINE" && config?.confirmed == true && config?.desired == false)
+        let starting = pending?.op == "up" || (status == "OFFLINE" && config?.desired == true)
+        let title = !valid ? "状态未知 · 请刷新核验" : stopping ? "正在停止 · 等待当前批次结束" :
+            starting ? "正在启动或恢复 · 等待核验" : status == "ONLINE" ?
+            (data?.schedulerBusy == true ? "调度运行中 · 正在执行批次" : "调度运行中") :
+            status == "OFFLINE" ? "调度已停止" : "调度状态未知 · 请查看日志"
+        connection.stringValue = title
+        connection.textColor = !valid || status != "ONLINE" ? NSColor(srgbRed: 0.57, green: 0.24, blue: 0.08, alpha: 1) : consoleInk
+        var lines = ["最近核验 " + runtimeTime(snapshot?.receivedAt)]
+        if let config {
+            lines.append("启动范围  " + config.series + " / " + config.phase + (config.confirmed ? "" : " · 待保存确认"))
+            let installed = data?.loginRestoreInstalled == true
+            lines.append("登录后自动恢复  " + (config.autoRestore && installed ? "已开启" : config.autoRestore ? "配置未安装，请重新保存" : "已关闭"))
+        }
+        if let next = data?.schedulerNextAt { lines.append("下一次计划 " + runtimeTime(next)) }
+        if status == "ONLINE", let coverage = data?.dashboard?.coverage { lines.append(coverage) }
+        if let health, let stamp = runtimeDate(health.heartbeatAt), Date().timeIntervalSince(stamp) < 30 {
+            lines.append("守护服务在线 · " + (health.reason ?? ""))
+            if status == "ONLINE", let series = health.series, let phase = health.phase {
+                lines.append("当前运行  " + series + " / " + phase)
+            }
+        }
+        if config?.desired == true && (runtimeDate(health?.heartbeatAt).map { Date().timeIntervalSince($0) >= 30 } ?? true) {
+            lines.append("守护服务心跳缺失，请检查调度日志。")
+        }
+        if let exit = health?.lastExitAt { lines.append("最近退出 " + runtimeTime(exit)) }
+        if status == "OFFLINE", plans.contains(where: { $0.dueAt != nil && $0.status == "UNKNOWN" }) {
+            lines.append("已过计划时间的任务缺少完成证据，启动后请核实并单独补跑。")
+        }
+        connection.toolTip = lines.joined(separator: "\n")
+        let check = "最近核验 " + runtimeTime(snapshot?.receivedAt)
+        schedulerDetail.stringValue = check
+        schedulerDetail.toolTip = connection.toolTip
+        let op = status == "ONLINE" ? "down" : "up"
+        schedulerButton.identifier = NSUserInterfaceItemIdentifier(op)
+        schedulerButton.title = op == "up" ? "启动调度" : data?.schedulerBusy == true ? "完成本次后停止" : "停止调度"
+        schedulerButton.isEnabled = businessCanSubmit("scheduler", op: op, state: snapshot, controls: controls, ready: available) && !stopping && !starting
+        settingsButton.isEnabled = available && !controls.contains { $0.unsettled }
+    }
+    @objc private func schedulerSettings() {
+        guard available, let config = snapshot?.snapshot?.schedulerSettings else { return }
+        let alert = NSAlert(); alert.messageText = "调度设置"
+        alert.informativeText = "车型代际使用业务配置中的名称，多个用英文逗号分隔。阶段支持 presale、launch。时间按上海时区执行。修改范围前请先停止调度。\n" + config.source
+        let series = NSTextField(string: config.series), phase = NSTextField(string: config.phase)
+        let restore = NSButton(checkboxWithTitle: "登录后自动恢复已开启的调度", target: nil, action: nil)
+        restore.state = config.autoRestore ? .on : .off
+        let fields = NSStackView(views: [label("车型代际"), series, label("业务阶段"), phase, restore])
+        fields.orientation = .vertical; fields.alignment = .leading; fields.spacing = 8
+        fields.frame = NSRect(x: 0, y: 0, width: 440, height: 160)
+        series.widthAnchor.constraint(equalToConstant: 440).isActive = true
+        phase.widthAnchor.constraint(equalToConstant: 440).isActive = true
+        alert.accessoryView = fields; alert.addButton(withTitle: "保存设置"); alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        submitting = true; update()
+        client.request("scheduler-settings", body: ["series": series.stringValue.trimmingCharacters(in: .whitespaces),
+            "phase": phase.stringValue.trimmingCharacters(in: .whitespaces), "autoRestore": restore.state == .on]) { [weak self] (result: Result<SchedulerSettings, Error>) in
+            guard let self else { return }; self.submitting = false
+            switch result {
+            case .success: self.feedback.stringValue = "调度设置已保存。"
+            case .failure(let error): self.feedback.stringValue = error.localizedDescription
+            }
+            self.refresh()
+        }
+    }
     @objc private func schedulerAction(_ sender:NSButton) {
-        guard available, sender.isEnabled else { return }
-        mutate("request",body:["targetId":"scheduler","op":sender.identifier!.rawValue])
+        guard available, sender.isEnabled, let op = sender.identifier?.rawValue else { return }
+        guard op == "down" || snapshot?.snapshot?.schedulerSettings?.confirmed == true else {
+            schedulerSettings(); return
+        }
+        let config = snapshot?.snapshot?.schedulerSettings
+        let alert = NSAlert(); alert.messageText = op == "down" ? "停止自动调度？" : "确认启动调度"
+        alert.informativeText = op == "down" ? "等待当前批次完成后停止。后续计划暂停，主动停止状态会持续保留。" :
+            "监控范围  \(config?.series ?? "") / \(config?.phase ?? "")\n时区  Asia/Shanghai\n启动后按计划执行，漏跑任务需核实后单独补跑。"
+        alert.addButton(withTitle: "确认"); alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn, available else { return }
+        mutate("request",body:["targetId":"scheduler","op":op],autoApprove:true)
     }
     private func mutate(_ action:String, body:[String:Any], autoApprove:Bool = false) {
         submitting = true; update()
@@ -393,7 +509,7 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
     @objc private func approveSelected() {
         guard available, approve.isEnabled, let selected else { return }
         let alert = NSAlert(); alert.messageText = "确认执行 \(businessLabel(selected.targetId))"
-        alert.informativeText = selected.targetId == "scheduler" ? "将改变调度器状态；停止或重启可能中断当前批次。" : "将运行现有业务入口，可能刷新本地数据并写入或发送飞书消息。"
+        alert.informativeText = selected.targetId == "scheduler" ? "将使用保存的监控范围；停止或重启会等待当前批次完成。" : "将运行现有业务入口，可能刷新本地数据并写入或发送飞书消息。"
         alert.addButton(withTitle:"确认执行"); alert.addButton(withTitle:"取消")
         if alert.runModal() == .alertFirstButtonReturn { mutate("approve",body:["controlId":selected.controlId]) }
     }
@@ -446,14 +562,19 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
         if tableView === planTable {
             let plan = plans[index]
             switch column?.identifier.rawValue {
-            case "name": return label(plan.name,bold:true)
-            case "schedule": return label(plan.schedule,size:12)
+            case "name": return label(plan.id == "allupdate" ? "全量数据更新" : plan.name,bold:true)
+            case "schedule":
+                let next = plan.nextAt.map { String(runtimeTime($0).prefix(11)) }
+                let schedule = label(next ?? (plan.id == "allupdate" ? "手动执行" : "暂无计划"), size: 12)
+                schedule.toolTip = plan.schedule
+                schedule.textColor = consoleMuted
+                return schedule
             case "action":
-                let buttons = NSStackView(); buttons.orientation = .vertical; buttons.alignment = .leading; buttons.spacing = 2
+                let buttons = row([]); buttons.spacing = 4
                 if plan.manualTarget != nil {
-                    let run = NSButton(title:"运行一次",target:self,action:#selector(runPlan(_:))); run.tag = index; run.isEnabled = canRun(plan); buttons.addArrangedSubview(run)
+                    let run = NSButton(title:"运行一次",target:self,action:#selector(runPlan(_:))); run.tag = index; run.isEnabled = canRun(plan); styleButton(run); buttons.addArrangedSubview(run)
                 } else { buttons.addArrangedSubview(label("不可手动运行",size:11)) }
-                let logs = NSButton(title:"查看日志",target:self,action:#selector(planDetails(_:))); logs.tag = index; logs.bezelStyle = .recessed; buttons.addArrangedSubview(logs)
+                let logs = NSButton(title:"查看日志",target:self,action:#selector(planDetails(_:))); logs.tag = index; logs.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: "查看日志"); logs.imagePosition = .imageOnly; logs.toolTip = "查看日志"; styleButton(logs); buttons.addArrangedSubview(logs)
                 return buttons
             default:
                 let view = NSStackView(); view.orientation = .vertical; view.alignment = .leading; view.spacing = 3
@@ -464,14 +585,18 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
                 switch state {
                 case "SUCCESS": statusView = PlanStatusTag(label: status, tint: .systemGreen)
                 case "FAILED": statusView = PlanStatusTag(label: status, tint: .systemRed)
-                default: statusView = status
+                case "UNKNOWN": statusView = PlanStatusTag(label: status, tint: .systemOrange)
+                default: statusView = PlanStatusTag(label: status, tint: .gray)
                 }
-                let reason = label(own?.reason ?? plan.reason,size:11); reason.maximumNumberOfLines = 1
-                reason.lineBreakMode = .byTruncatingTail; reason.toolTip = plan.reason
-                let evidence = plan.dueAt.map { "应执行 " + runtimeTime($0) } ?? plan.lastAt.map { "最近记录 " + runtimeTime($0) } ?? plan.note
-                let stamp = label(evidence,size:10); stamp.textColor = .secondaryLabelColor
+                let rawReason = own?.reason ?? plan.reason
+                let reasonText = rawReason.hasPrefix("该应执行时点缺少完成证据") ? "缺少完成证据" : rawReason
+                let timestamp = (state == "UNKNOWN" && reasonText == "缺少完成证据" ? plan.dueAt : plan.lastAt)
+                    .map { String(runtimeTime($0).prefix(11)) + " · " } ?? ""
+                let reason = label(timestamp + reasonText, size: 11)
+                reason.textColor = consoleMuted; reason.maximumNumberOfLines = 1
+                reason.lineBreakMode = .byTruncatingTail; reason.toolTip = rawReason
                 view.toolTip = "\(plan.reason)\n\(plan.note)\n" + (plan.lastAt.map { "最近记录：" + runtimeTime($0) } ?? "暂无记录")
-                view.addArrangedSubview(statusView); view.addArrangedSubview(reason); view.addArrangedSubview(stamp); return view
+                view.addArrangedSubview(statusView); view.addArrangedSubview(reason); return view
             }
         }
         let control = controls[index]
@@ -482,10 +607,10 @@ final class BusinessRuntimeWindow: NSWindowController, NSTableViewDataSource, NS
     func tableViewSelectionDidChange(_ notification:Notification) { if notification.object as? NSTableView === table { update() } }
     private func loadPreview() {
         let now = ISO8601DateFormatter().string(from:Date())
-        snapshot = RuntimeEnvelope(available:true,receivedAt:now,snapshot:RuntimeSnapshot(services:[RuntimeEntry(id:"scheduler",label:"Scheduler",status:"ONLINE")],jobs:[],operations:[],plans:[
-            RuntimePlan(id:"daily",name:"每日数据与日报",schedule:"每天 08:50",status:"UNKNOWN",reason:"今日缺少完成证据",manualTarget:"daily",dueAt:"2026-11-05T08:50:00+08:00",lastAt:"2026-11-02T08:50:01+08:00",note:""),
-            RuntimePlan(id:"monitor/LS8Neo",name:"LS8Neo 订单监控",schedule:"每天 08:50；关键日 20:00 / 21:00 / 22:00 / 23:00",status:"SUCCESS",reason:"模拟监控结果",manualTarget:"monitor/LS8Neo",note:"监控截至 2026-11-30"),
-            RuntimePlan(id:"allupdate",name:"Full data update",schedule:"手动执行",status:"FAILED",reason:"dataset_validate 退出码 2",manualTarget:"allupdate",lastAt:"2026-11-04T10:10:00+08:00",note:"")]))
+        snapshot = RuntimeEnvelope(available:true,receivedAt:now,snapshot:RuntimeSnapshot(services:[RuntimeEntry(id:"scheduler",label:"Scheduler",status:"OFFLINE")],jobs:[],operations:[],plans:[
+            RuntimePlan(id:"daily",name:"每日数据与日报",schedule:"每天 08:50",status:"UNKNOWN",reason:"今日缺少完成证据",manualTarget:"daily",dueAt:"2026-11-05T08:50:00+08:00",lastAt:"2026-11-02T08:50:01+08:00",note:"",nextAt:"2026-11-08T08:50:00+08:00"),
+            RuntimePlan(id:"monitor/LS8Neo",name:"LS8Neo 订单监控",schedule:"每天 08:50；关键日 20:00 / 21:00 / 22:00 / 23:00",status:"SUCCESS",reason:"模拟监控结果",manualTarget:"monitor/LS8Neo",note:"监控截至 2026-11-30",nextAt:"2026-11-07T20:00:00+08:00"),
+            RuntimePlan(id:"allupdate",name:"Full data update",schedule:"手动执行",status:"FAILED",reason:"dataset_validate 退出码 2",manualTarget:"allupdate",lastAt:"2026-11-04T10:10:00+08:00",note:"")], schedulerSettings: SchedulerSettings(series:"LS8Neo", phase:"launch", timezone:"Asia/Shanghai", autoRestore:false, desired:false, confirmed:false, source:"历史启动记录，保存前请核对"), loginRestoreInstalled:false))
         connection.stringValue = "Scheduler：运行中 · 模拟预览 · 全部生产操作禁用"
         feedback.stringValue = "模拟数据，仅用于布局检查。"; update()
     }

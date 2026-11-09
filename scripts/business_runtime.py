@@ -7,7 +7,7 @@ commands. Business implementations and credentials remain in mashang-service.
 import argparse
 import ast
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import fcntl
 import json
 import importlib.util
@@ -20,10 +20,11 @@ import subprocess
 import sys
 import time
 import uuid
+from scheduler_service import SchedulerService
 from zoneinfo import ZoneInfo
 
 
-def today_overview(root, rows, pids, daily=None, today=None, structured=False):
+def today_overview(root, rows, pids, daily=None, today=None, structured=False, settings=None):
     """Read business phase rules without invoking monitoring or scheduling."""
     today = today or datetime.now(ZoneInfo('Asia/Shanghai')).date()
     try:
@@ -52,6 +53,10 @@ def today_overview(root, rows, pids, daily=None, today=None, structured=False):
                 if option == '--series': scope = value.split(',') if value else None
                 elif value: phases = value.split(',')
             binding = '当前进程范围'
+        elif settings and settings.get('confirmed'):
+            scope = settings['series'].split(',')
+            phases = settings['phase'].split(',')
+            binding = '已保存的启动范围'
         else:
             match = re.search(r'^sales-scheduler:\s*SERIES\s*\?=\s*(.*)$', (root / 'Makefile').read_text(), re.M)
             scope = match.group(1).strip().split(',') if match and match.group(1).strip() else None
@@ -152,7 +157,12 @@ def evidence_state(record, kind):
     if kind == 'monitor' and record.get('kind') == 'daily': needed = ['refresh_daily', 'dataset_validate', 'daily_observation_sync', 'monitor']
     failed = next(((name, code) for name, code in steps.items() if name in needed and code != 0), None)
     if status in {'FAILED', 'TIMEOUT', 'CANCELLED'} or record.get('code', 0) not in (0, None) or failed:
-        return 'FAILED', (f'{failed[0]} 退出码 {failed[1]}' if failed else record.get('reason') or f'退出码 {record.get("code")}')[:140]
+        code = record.get('code')
+        if failed:
+            return 'FAILED', f'{failed[0]} 退出码 {failed[1]}'
+        if code not in (None, 0):
+            return 'FAILED', f'命令退出码 {code} · 查看日志'
+        return 'FAILED', (record.get('reason') or '执行失败 · 查看日志')[:140]
     completed = status == 'COMPLETED' and record.get('code') == 0 if record.get('source') != 'scheduler' else all(steps.get(name) == 0 for name in needed)
     if not completed:
         return ('RUNNING', '任务正在执行') if record.get('active') and not all(name in steps for name in needed) else ('UNKNOWN', '执行记录不完整，需核实')
@@ -167,8 +177,8 @@ def evidence_state(record, kind):
 
 def build_plans(root, dashboard, records, batches, daily_time, sampled=None, log_reader=None):
     from datetime import timedelta
-    sampled = sampled or datetime.now(ZoneInfo('Asia/Shanghai'))
     tz = ZoneInfo('Asia/Shanghai')
+    sampled = sampled.astimezone(tz) if sampled else datetime.now(tz)
     definition = read_json(root / 'shared/schema/business_definition.json') or {}
     key_dates = {period.get(key) for period in definition.get('time_periods', {}).values() for key in ['start', 'end']}
     hours = sorted(int(hour) for hour in ((definition.get('monitor') or {}).get('freshness') or {}).get('key_day_hours', [17,18,19,20,21,22,23]))
@@ -178,7 +188,7 @@ def build_plans(root, dashboard, records, batches, daily_time, sampled=None, log
         if not record.get('startedAt') and record.get('status') != 'AWAITING_PERMISSION': continue
         item = dict(record, source='manual', text=log_reader(record['controlId']) if log_reader else '')
         manual.append(item)
-    def plan(identifier, name, schedule, kind, target, due, candidates, note=''):
+    def plan(identifier, name, schedule, kind, target, due, candidates, note='', next_at=None):
         candidates = sorted(candidates, key=lambda item: stamp(item.get('startedAt') or datetime.fromtimestamp(item['createdAt']/1000, tz).isoformat()), reverse=True)
         latest = candidates[0] if candidates else None
         eligible = next((item for item in candidates if item.get('status') in {'DISPATCHED','RUNNING','CANCELLING','AWAITING_PERMISSION'}), None)
@@ -193,6 +203,7 @@ def build_plans(root, dashboard, records, batches, daily_time, sampled=None, log
             if latest and latest.get('startedAt'): reason += ' · 最近记录 ' + stamp(latest['startedAt']).strftime('%m-%d')
         result = {'id': identifier, 'name': name, 'schedule': schedule, 'status': state, 'reason': reason,
                   'manualTarget': target, 'dueAt': due.isoformat() if due else None,
+                  'nextAt': next_at.isoformat() if next_at else None,
                   'lastAt': latest.get('startedAt') if latest else None, 'note': note,
                   'controlId': eligible.get('controlId') if eligible else None}
         result['logDate'] = (stamp(eligible['startedAt']).date().isoformat() if eligible and eligible.get('source') == 'scheduler'
@@ -200,8 +211,9 @@ def build_plans(root, dashboard, records, batches, daily_time, sampled=None, log
         return result
     daily_due = sampled.replace(hour=daily_time[0], minute=daily_time[1], second=0, microsecond=0)
     if daily_due > sampled: daily_due -= timedelta(days=1)
+    daily_next = daily_due + timedelta(days=1)
     result = [plan('daily', '每日数据与日报', f'每天 {daily_time[0]:02}:{daily_time[1]:02}', 'daily', 'daily', daily_due,
-                   [b for b in batches if b['kind'] == 'daily'] + [r for r in manual if r['targetId'] == 'daily'])]
+                   [b for b in batches if b['kind'] == 'daily'] + [r for r in manual if r['targetId'] == 'daily'], next_at=daily_next)]
     # Active models are derived from the canonical phase rules, never Makefile defaults.
     for model in dashboard.get('models', []):
         generation = model['name']
@@ -225,9 +237,21 @@ def build_plans(root, dashboard, records, batches, daily_time, sampled=None, log
         if start and due.date().isoformat() < start: due = None
         candidates = model_candidates + [r for r in manual if r['targetId'] == target]
         schedule = f'每天 {daily_time[0]:02}:{daily_time[1]:02}' + ('；关键日 ' + ' / '.join(event_times) if event_times else '；关键日按业务配置')
+        next_at = daily_next
+        for day in (sampled, daily_next):
+            if day.date().isoformat() not in key_dates:
+                continue
+            for hour in hours:
+                slot = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+                if sampled < slot < next_at:
+                    next_at = slot
+        next_day = next_at.date().isoformat()
+        until = model['until']
+        if not model['covered'] or next_day > until or (next_day == until and model.get('phase') == '预售监控'):
+            next_at = None
         supported = (root / 'workspace/business_scripts/vehicle_sales_monitor.py').exists() and re.search(r'^monitor-sync:', (root/'Makefile').read_text(), re.M)
         result.append(plan(target, generation + ' 订单监控', schedule, 'monitor', target if supported else None, due, candidates,
-                           ('未被 Scheduler 范围覆盖；' if not model['covered'] else '') + f'监控截至 {model["until"]}'))
+                           ('未被 Scheduler 范围覆盖；' if not model['covered'] else '') + f'监控截至 {model["until"]}', next_at=next_at))
     result.append(plan('allupdate', 'Full data update', '手动执行', 'allupdate', 'allupdate', None,
                        [r for r in manual if r['targetId'] == 'allupdate']))
     return result
@@ -297,7 +321,12 @@ def scheduler_pids(root, rows):
         if not words or not re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', Path(words[0]).name, re.IGNORECASE):
             continue
         cwd = process_cwd(pid)
-        if cwd == root and any((cwd / word).resolve() == root / SCRIPT for word in words[1:] if word.endswith('sales_scheduler.py')):
+        # ps does not quote argv paths containing spaces. Match the known script
+        # prefix as well as shell-quoted/relative invocations.
+        arguments = row['command'].split(None, 1)[1]
+        absolute_script = str(root / SCRIPT)
+        exact_prefix = arguments == absolute_script or arguments.startswith(absolute_script + ' ')
+        if cwd == root and (exact_prefix or any((cwd / word).resolve() == root / SCRIPT for word in words[1:] if word.endswith('sales_scheduler.py'))):
             result.append(pid)
     return result
 
@@ -434,12 +463,30 @@ class Runtime:
                 run = daily
             operations.append({'id': target, 'label': TARGETS[target], 'enabled': len(pids) < 2,
                                'cancellationSupported': True, 'lastRun': run})
-        dashboard = today_overview(self.root, rows, pids, daily, structured=True)
-        plans = build_plans(self.root, dashboard, records, batches, daily_time, log_reader=lambda control: self.tail(self.state / 'logs' / (control + '.log'))) if daily_time else []
+        service = SchedulerService(self)
+        settings = service.settings(rows, pids)
+        health = service.details()
+        dashboard = today_overview(self.root, rows, pids, daily, structured=True, settings=settings)
+        upcoming = []
+        sampled = datetime.now(ZoneInfo('Asia/Shanghai'))
+        if daily_time:
+            daily_slot = sampled.replace(hour=daily_time[0], minute=daily_time[1], second=0, microsecond=0)
+            upcoming.append(daily_slot if daily_slot > sampled else daily_slot + timedelta(days=1))
+        for task in dashboard.get('tasks', []):
+            if task['title'] == '每日数据与日报':
+                continue
+            hour, minute = map(int, task['time'].split(':'))
+            slot = sampled.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if slot > sampled:
+                upcoming.append(slot)
+        next_at = min(upcoming).isoformat() if upcoming and len(pids) == 1 and not (settings.get('confirmed') and not settings.get('desired')) else None
+        plans = build_plans(self.root, dashboard, records, batches, daily_time, sampled=sampled, log_reader=lambda control: self.tail(self.state / 'logs' / (control + '.log'))) if daily_time else []
         return {'available': True, 'receivedAt': now(), 'serviceRoot': str(self.root),
                 'snapshot': {'services': [{'id': 'scheduler', 'label': 'Scheduler',
                     'status': 'ONLINE' if len(pids) == 1 else 'OFFLINE' if not pids else 'UNKNOWN',
                     'description': schedule, 'detail': f'{len(pids)} 个调度进程' + (' · 正在执行批次' if active else '')}],
+                    'schedulerSettings': settings, 'schedulerHealth': health, 'schedulerNextAt': next_at,
+                    'loginRestoreInstalled': service.plist.exists(),
                     'jobs': [], 'operations': operations, 'schedulerBusy': active or len(pids) > 1, 'todayOverview': dashboard['overview'], 'dashboard': dashboard, 'plans': plans}}
 
     def validate_operation(self, target, op):
@@ -554,52 +601,10 @@ class Runtime:
             return file.read().decode('utf-8', errors='replace')
 
     def stop_scheduler(self):
-        rows = process_table()
-        pids = scheduler_pids(self.root, rows)
-        if len(pids) > 1:
-            raise RuntimeError('检测到重复调度器，拒绝猜测；请先核验进程')
-        owned = descendants(pids, rows)
-        for pid in owned:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + 8
-        while owned and time.monotonic() < deadline:
-            time.sleep(0.2)
-            fresh = process_table()
-            owned = {pid for pid in owned if pid in fresh and fresh[pid]['command'] == rows[pid]['command']}
-        for pid in owned:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        if scheduler_pids(self.root, process_table()):
-            raise RuntimeError('Scheduler 停止状态尚未确认')
+        SchedulerService(self).stop()
 
     def start_scheduler(self):
-        pids = scheduler_pids(self.root, process_table())
-        if len(pids) > 1:
-            raise RuntimeError('检测到重复调度器，拒绝启动')
-        if pids:
-            return
-        env = os.environ.copy(); env.pop('MAKEFLAGS', None); env.pop('MFLAGS', None)
-        with open(self.state / 'scheduler.log', 'ab', buffering=0) as output:
-            child = subprocess.Popen(['/usr/bin/caffeinate', '-i', '/usr/bin/make', '-j1', 'sales-scheduler'],
-                cwd=self.root, env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if child.poll() is not None:
-                    raise RuntimeError(f'Scheduler 启动失败，退出码 {child.returncode}；查看调度日志')
-                if len(scheduler_pids(self.root, process_table())) == 1:
-                    return
-                time.sleep(0.3)
-            raise RuntimeError('Scheduler 启动核验超时')
-        except Exception:
-            # Do not leave an unverified process behind if probing fails.
-            self.terminate_child(child)
-            raise
+        SchedulerService(self).start()
 
     @staticmethod
     def terminate_child(child):
@@ -670,7 +675,7 @@ def main():
     parser.add_argument('--service-root', type=Path, required=True)
     parser.add_argument('--state-dir', type=Path, required=True)
     parser.add_argument('--execute')
-    parser.add_argument('action', nargs='?', choices=['status', 'history', 'request', 'approve', 'cancel', 'review', 'logs', 'wait'])
+    parser.add_argument('action', nargs='?', choices=['status', 'history', 'request', 'approve', 'cancel', 'review', 'logs', 'wait', 'scheduler-settings'])
     parser.add_argument('payload', nargs='?', default='{}')
     args = parser.parse_args()
     runtime = Runtime(args.service_root, args.state_dir)
@@ -680,6 +685,7 @@ def main():
             return
         body = json.loads(args.payload)
         if args.action == 'status': result = runtime.status()
+        elif args.action == 'scheduler-settings': result = SchedulerService(runtime).save(body)
         elif args.action == 'history': result = runtime.history()
         elif args.action == 'request': result = runtime.request(body.get('targetId'), body.get('op'))
         elif args.action == 'approve': result = runtime.approve(body.get('controlId', ''))
