@@ -29,9 +29,9 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   return [
     tool({
       name: 'business_job',
-      description: 'Authorized production refresh. refresh_snapshot runs a fixed plan and binds read-only inputs; use it for refresh plus analysis. run_ls8_mix is the LS8 fallback.',
+      description: 'Authorized production refresh. refresh_snapshot runs a fixed plan and binds read-only inputs; use it for refresh plus analysis.',
       schema: z.object({
-        operation: z.enum(['run', 'status', 'run_ls8_mix', 'refresh_snapshot']),
+        operation: z.enum(['run', 'status', 'refresh_snapshot']),
         job_id: z.enum(BUSINESS_JOB_IDS).optional(),
         trigger_id: z.string().optional().describe('Omit to resolve the human request automatically.'),
         plan: z.object({
@@ -49,10 +49,6 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         }
         if (args.plan) throw new Error('plan is only accepted by refresh_snapshot')
         if (args.operation === 'status') return await host.businessJobs.status(ticketId)
-        if (args.operation === 'run_ls8_mix') {
-          if (args.job_id && args.job_id !== 'data-refresh-config-attribute') throw new Error('run_ls8_mix requires the configuration job')
-          return await host.businessJobs.execute(current, 'data-refresh-config-attribute', args.trigger_id, signal, true)
-        }
         return await host.businessJobs.execute(current, args.job_id ?? 'data-refresh-daily', args.trigger_id, signal)
       },
     }),

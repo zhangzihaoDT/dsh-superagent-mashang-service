@@ -33,17 +33,6 @@ No arbitrary command, shell string or user-supplied argv reaches either layer.
 
 The separate `data-refresh-config-attribute` entry calls service Job
 `data_refresh_config_attribute`, which refreshes and verifies only `config_attribute`.
-For the combined LS8 request, the Executor calls `business_job operation=run_ls8_mix`.
-The same authorization check covers the workflow, including the conditional daily
-refresh if the order lock cutoff is older than the previous Shanghai calendar date.
-
-The service stages a versioned read-only copy of both Parquet files, checking the
-configuration file against the successful refresh record. The fixed service query
-uses only those copies. The host atomically binds the validated version in the
-Ticket's business-job record. Previous versions and the original Prepare record
-are retained. The combined workflow reports its own snapshot, and ordinary Prepare
-queries continue to use the original worktree. Failed refresh, verification, copy,
-query or order freshness checks leave the previous binding in place.
 
 ### Refresh and analyze
 
@@ -85,8 +74,7 @@ the same request can add a dependency refresh by naming the current snapshot
 version. On success, pass the returned `snapshot_path` directly to a maintained
 read-only query. The result includes the input version, metric cutoff and query
 checks. Refresh results expose service command durations and host timings for
-refresh/verification and snapshot binding. The LS8 fallback stays
-available until the generic workflow has passed live acceptance.
+refresh/verification and snapshot binding.
 
 ## Authorization and direct execution
 

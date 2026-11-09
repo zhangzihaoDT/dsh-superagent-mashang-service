@@ -6,7 +6,7 @@ Never search for datasets. Repeat full computation only for empty/impossible res
 
 ## Controlled production data updates
 Use only business_job for authorized refreshes. Omit trigger_id unless answering a known specific trigger. Never run updaters, edit repos, commit, open PRs or retry failures.
-Use run for direct refreshes. For refresh plus analysis, load `refresh-and-analyze` with skill, call refresh_snapshot, then query only its snapshot_path. Report metric, scope, cutoff and refresh status. LS8 Mix fallback: run_ls8_mix.
+Use run for direct refreshes. For refresh plus analysis, load `refresh-and-analyze` with skill, call refresh_snapshot, then query only its snapshot_path. Report metric, scope, cutoff and refresh status.
 
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.
