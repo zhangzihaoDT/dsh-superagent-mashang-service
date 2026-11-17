@@ -1,0 +1,25 @@
+{
+  "name": "dsh-data-prep",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dataset catalog, freshness policy and read-only snapshot provider for DSH tools and analysis plugins. Reuses or creates a consistent snapshot on request, records coverage, cutoffs, definition hashes and a snapshot id, and exposes the capability as the data_prepare tool and the dataPreparation Host service.",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "dataset_probe.py",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

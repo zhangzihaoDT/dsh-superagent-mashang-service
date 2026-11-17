@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Data Preparation",
+    "description": "Keeps the project dataset catalog and freshness policy, reuses or creates read-only snapshots for analysis plugins, and returns the snapshot id, coverage and data cutoffs."
+  }
+}

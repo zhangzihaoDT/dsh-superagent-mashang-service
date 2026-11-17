@@ -47,6 +47,7 @@ let sections: Map<string, Section>
 type Guard = (execution?: { name: string; arguments: unknown }) => string | undefined
 let guards: Map<string, Guard>
 let restricts: Map<string, unknown[]>
+let additionalInheritedTools: string[]
 type HttpHandler = (req: unknown, res: unknown) => Promise<void>
 let http: HttpHandler
 async function api(method: string, path: string): Promise<{ status: number; body: unknown }> {
@@ -158,6 +159,7 @@ beforeEach(async () => {
   sections = new Map()
   guards = new Map()
   restricts = new Map()
+  additionalInheritedTools = []
   deliveries = vi.fn()
   controller = {
     create: vi.fn(async ({ sessionId, agentPreset }) => {
@@ -165,7 +167,8 @@ beforeEach(async () => {
       const agentCtx = new Context()
       const preset = {}
       const inherited = ['bash', 'read', 'read_image', 'skill', 'job_output', 'job_list', 'job_kill', 'grep', 'web_search',
-        'ask_user_question', 'plugin_manager', 'schedule_create', 'create_goal', 'session_create', 'session_send_message', 'feishu_doc_edit']
+        'ask_user_question', 'plugin_manager', 'schedule_create', 'create_goal', 'session_create', 'session_send_message', 'feishu_doc_edit',
+        ...additionalInheritedTools]
       const sessionTools = new Map<string, RegisteredTool>()
       tools.set(sessionId, sessionTools)
       agentCtx.reflect.provide('tools', { register: (tool: RegisteredTool) => { sessionTools.set(tool.name,
@@ -1564,6 +1567,18 @@ it('refuses an ended ticket\'s worker its tools, and restricts the main Session 
   // A worker keeps only the profile's work tools: none that ask a person, change the profile, schedule or start work outside
   // the worker slots, reach other Sessions or edit documents, whenever they were registered.
   expect(restricts.get(sessionId)).toEqual([{ allow: ['read', 'read_image', 'grep', 'bash', 'job_output', 'job_list', 'job_kill', 'web_search', 'skill'] }])
+})
+
+it('allows the installed order configuration tool in workers while keeping the router restricted', async () => {
+  additionalInheritedTools.push('order_config_ratio', 'data_prepare')
+  const { ticket, sessionId } = await acceptedTicket()
+  expect(restricts.get(sessionId)).toEqual([{ allow: ['read', 'read_image', 'grep', 'bash', 'job_output', 'job_list', 'job_kill', 'web_search', 'skill', 'order_config_ratio', 'data_prepare'] }])
+  expect(restricts.get(runtime.masterId)).toEqual([{ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }])
+  expect(sections.get(sessionId)!.text({})).toContain('call data_prepare with the required datasets')
+  expect(guards.get(sessionId)!({ name: 'order_config_ratio', arguments: { refresh: true } })).toContain('business_job.refresh_snapshot')
+  expect(guards.get(sessionId)!()).toBeUndefined()
+  runtime.engine.stopTicket(ticket.id)
+  expect(guards.get(sessionId)!()).toBe('Ticket ended; new work needs a new authorized ticket')
 })
 
 it('gives an explicit ticket\'s worker a prompt without the limits of an inferred Mandate', async () => {

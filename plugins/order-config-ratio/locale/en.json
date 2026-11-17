@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Order Configuration Share",
+    "description": "Resolves the vehicle, metric and configuration dimension from authoritative definitions, binds a data snapshot, joins order and configuration data, and returns share, denominator, missing count, filters and provenance in one call."
+  }
+}

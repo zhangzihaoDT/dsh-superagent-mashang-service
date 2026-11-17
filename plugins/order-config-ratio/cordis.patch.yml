@@ -1,0 +1,3 @@
+- insert:
+    - id: order-config-ratio
+      name: dsh-order-config-ratio
