@@ -50,16 +50,22 @@ function fixture(options: { allowed?: boolean; human?: boolean; now?: () => Date
   return { directory, settings, triggers, origin, ticket, runs, runner, jobs }
 }
 
-it('runs a registered regular job immediately for an allowlisted explicit requester', async () => {
-  const { jobs, ticket, runner, runs } = fixture()
-  const result = await jobs.execute(ticket, 'data-refresh-daily', TRIGGER, new AbortController().signal)
-  expect(result).toMatchObject({ job: 'data-refresh-daily', status: 'success' })
+it.each([
+  ['data-refresh-daily', '更新订单数据'],
+  ['update-tp-and-mix-ways-dataset', '更新 TP&MIX-ways 上险数据'],
+] as const)('routes %s for an allowlisted explicit requester', async (job, request) => {
+  const { jobs, ticket, runner, runs, origin } = fixture()
+  origin.text = request
+  ticket.mandate.scope = request
+  const result = await jobs.execute(ticket, job, TRIGGER, new AbortController().signal)
+  expect(result).toMatchObject({ job, status: 'success' })
   expect(runner).toHaveBeenCalledOnce()
+  expect(runs[0]!.job).toBe(job)
   expect(runs[0]!.input.requestedBy).toContain(TRIGGER)
   const status = await jobs.status(ticket.id) as { last: { status: string; requestedBy: string }; job: string }
   expect(status.last.status).toBe('success')
   expect(status.last.requestedBy).toContain(TRIGGER)
-  expect(status.job).toBe('data-refresh-daily')
+  expect(status.job).toBe(job)
 })
 
 it('stores no pending state or confirmation code', async () => {

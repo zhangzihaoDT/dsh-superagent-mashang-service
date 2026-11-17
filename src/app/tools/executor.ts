@@ -29,11 +29,11 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   return [
     tool({
       name: 'business_job',
-      description: 'Authorized production refresh. refresh_snapshot runs a fixed plan and binds read-only inputs; use it for refresh plus analysis.',
+      description: 'Authorized production jobs and read-only snapshots.',
       schema: z.object({
         operation: z.enum(['run', 'status', 'refresh_snapshot']),
         job_id: z.enum(BUSINESS_JOB_IDS).optional(),
-        trigger_id: z.string().optional().describe('Omit to resolve the human request automatically.'),
+        trigger_id: z.string().optional().describe('Human request ID.'),
         plan: z.object({
           jobs: z.array(z.enum(BUSINESS_JOB_IDS)).min(1).max(BUSINESS_JOB_IDS.length),
           datasets: z.array(z.enum(BUSINESS_DATASET_IDS)).min(1).max(BUSINESS_DATASET_IDS.length),

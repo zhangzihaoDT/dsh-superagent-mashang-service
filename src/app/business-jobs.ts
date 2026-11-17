@@ -28,11 +28,22 @@ interface BusinessJobSpec {
 }
 
 /** The only production jobs the agent may start. The service repository declares the matching `jobs` entry. */
-export const BUSINESS_DATASET_IDS = ['order_data', 'assign_data', 'config_attribute', 'lock_attribution'] as const
+const TP_MIX_DATASET_IDS = ['tp_mix_brand_monthly', 'tp_mix_geo_monthly', 'tp_mix_market_energy_monthly',
+  'tp_mix_model_monthly', 'tp_mix_price_segment_monthly', 'tp_mix_product_segment_monthly'] as const
+export const BUSINESS_DATASET_IDS = ['order_data', 'assign_data', 'config_attribute', 'lock_attribution', ...TP_MIX_DATASET_IDS] as const
 export type BusinessDatasetId = typeof BUSINESS_DATASET_IDS[number]
-export const BUSINESS_JOB_IDS = ['data-refresh-daily', 'data-refresh-config-attribute', 'data-refresh-lock-attribution'] as const
+export const BUSINESS_JOB_IDS = ['data-refresh-daily', 'data-refresh-config-attribute', 'data-refresh-lock-attribution',
+  'update-tp-and-mix-ways-dataset'] as const
 export type BusinessJobId = typeof BUSINESS_JOB_IDS[number]
 export const BUSINESS_JOBS: Record<BusinessJobId, BusinessJobSpec> = {
+  'update-tp-and-mix-ways-dataset': {
+    serviceJob: 'update_tp_and_mix_ways_dataset',
+    label: '刷新 TP&MIX-ways 乘用车上险数据',
+    target: 'update-tp-and-mix-ways-dataset',
+    description: 'Refreshes and verifies the six TP&MIX-ways monthly tables from Tableau.',
+    approval: 'none',
+    datasets: [...TP_MIX_DATASET_IDS],
+  },
   'data-refresh-daily': {
     serviceJob: 'data_refresh_daily',
     label: '刷新订单与下发线索（daily scope）',
