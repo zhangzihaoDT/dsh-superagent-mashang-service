@@ -331,6 +331,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/settings-history.ts` | `policyHistory`: each saved settings revision with what it changed from the one before |
 | `src/app/prompts.ts` | Prompts, `builtInParts`, the built-in parts a team may override, and `promptParts`, the order of a role's prompt sections |
 | `src/app/context.ts` | The built-in prompt text, read from `prompts/`, and the transcript entries Sessions read |
+| `src/app/skill-routing-web.ts` | Standalone Web entry and a deployment receipt that identifies the mounted build |
+| `src/app/skill-routing.ts` | Admits explicit Skill requests before the first applicable model step and audits advisory matches against tool results |
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |
@@ -441,6 +443,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/store.spec.ts` | Repositories and their working sets, in SQLite as in memory, the kv area, with every key of `KV` spelled only in `src/kv.ts` and the migration, settings history and queries |
 | `tests/prompts.spec.ts` | Prompt validation, assembly and versions |
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
+| `tests/skill-routing.spec.ts` | Explicit Skill admission, failures, native slash reuse and advisory audit results |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
 | `tests/deployment.spec.ts`, `tests/environment.spec.ts`, `tests/index.spec.ts` | The plugin configuration and setup, the agent's process environment, the plugin entry |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent` against fake `ps`, `tmux` and `dsh` |
@@ -493,6 +496,11 @@ Nothing deletes old records yet, so these grow without bound: the `trigger`, `di
 `SCHEMA_VERSION` only increases. A database of a newer version refuses to start; `src/app/migration.ts` upgrades a database of the pre-release schema 10 once, at start, and refuses an older one.
 
 ## Model-facing interfaces
+
+Direct user messages can request a Skill with `/skill-name` or an explicit phrase such as `Use skill-name`.
+The proposed step admits the resolved instructions before the model request, or fails with a discovery, access or read error.
+Business relays retain their original source. Implicit matches are advisory and leave tool choice to the model.
+For turns with candidates, the Session records `dsh-superagent/skill-routing-audit` with matched terms and the tool outcomes.
 
 ### Main Session tools
 

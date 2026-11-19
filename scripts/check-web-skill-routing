@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Verify that the listening DSH Web process mounted the expected Skill Router."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parent.parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--port", type=int, default=3080)
+parser.add_argument("--receipt", type=Path, default=root / ".artifacts/web-skill-routing/active.json")
+parser.add_argument("--entry", type=Path, default=root / "lib/skill-routing.mjs")
+parser.add_argument("--dsh", default="dsh", help="DSH executable expected after upgrade")
+args = parser.parse_args()
+
+try:
+    listeners = subprocess.check_output(
+        ["lsof", "-nP", "-t", f"-iTCP:{args.port}", "-sTCP:LISTEN"], text=True
+    ).split()
+    if len(set(listeners)) != 1:
+        raise ValueError(f"expected one Web listener on port {args.port}, found {sorted(set(listeners))}")
+    receipt = json.loads(args.receipt.read_text())
+    pid = int(listeners[0])
+    if receipt["pid"] != pid:
+        raise ValueError(f"mount receipt is for PID {receipt['pid']}, Web listener is PID {pid}")
+    entry = args.entry.resolve(strict=True)
+    if receipt["entry"] != str(entry):
+        raise ValueError(f"Web mounted {receipt['entry']}, expected {entry}")
+    digest = hashlib.sha256(entry.read_bytes()).hexdigest()
+    if receipt["sha256"] != digest:
+        raise ValueError("listener loaded a different build; restart Web and check again")
+    installed = subprocess.check_output([args.dsh, "--version"], text=True).strip()
+    if receipt["dshVersion"] != installed:
+        raise ValueError(f"listener mounted under DSH {receipt['dshVersion']}, installed DSH is {installed}")
+except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    print(f"FAIL: {error}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"PASS: Web PID {pid}, DSH {installed}, mounted {entry} at {receipt['mountedAt']}, SHA-256 {digest}")

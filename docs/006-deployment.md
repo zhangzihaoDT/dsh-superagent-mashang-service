@@ -331,3 +331,26 @@ Diagnostics: `launchctl print gui/$(id -u)/local.dsh.superagent`,
 not prove plugin health: `status` retains its component errors/setup checks and
 exit codes 0/1/2/3. Login behavior is configured by RunAtLoad; verifying an actual
 logout/login must be done by the operator because it closes their desktop apps.
+
+### Verify Skill Routing after a Web restart or DSH upgrade
+
+For a standalone `web` profile, build the project and mount the standalone entry in the profile's `cordis.patch.yml`.
+Use absolute paths and create the receipt's parent directory before starting Web.
+A profile that already mounts the full Superagent bundle gets Skill Routing through that bundle.
+
+```yaml
+- insert:
+    - id: dsh-superagent-skill-routing
+      name: /absolute/path/to/checkout/lib/skill-routing.mjs
+      config:
+        receiptPath: /absolute/path/to/checkout/.artifacts/web-skill-routing/active.json
+```
+
+After the Web service restarts, including after a DSH upgrade, run `scripts/check-web-skill-routing` from the checkout.
+The checker requires the receipt to identify the current listening PID, the expected entry and build digest, and the installed DSH version.
+The plugin writes the receipt after registering its listeners and removes it on unmount.
+Use `--port`, `--receipt`, `--entry`, or `--dsh` for deployments with different paths, ports, or launchers.
+Include the command in the existing supervisor's post-start checks if it supports them. A failed check exits nonzero and prints the mismatch without restarting any service.
+
+After upgrading DSH, also verify a natural-language Skill request and an implicit candidate in separate new Web Sessions.
+The receipt verifies that the hooks registered on the running host. The Sessions verify that the upgraded host still dispatches those hooks.
